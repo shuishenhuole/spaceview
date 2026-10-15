@@ -1,9 +1,11 @@
-//! 大文件 TopN 面板:可按大小/路径排序的列表(仅渲染前 1000 行防卡顿)。
+//! 大文件 TopN 面板:可按大小/路径排序的列表(仅渲染前 1000 行防卡顿),
+//! 行上右键可复制路径 / 打开所在目录 / 删除到回收站。
 
 use std::path::PathBuf;
 
 use crate::engine::scanner::{FileHit, ScanResult};
 use crate::engine::tree::human_size;
+use crate::ui::RowAction;
 
 /// 排序方式
 #[derive(PartialEq, Clone, Copy)]
@@ -19,7 +21,8 @@ pub fn show(
     sort_by: &mut SortBy,
     selected: &mut Vec<PathBuf>,
     ui: &mut egui::Ui,
-) {
+) -> Option<RowAction> {
+    let mut row_action: Option<RowAction> = None;
     ui.horizontal(|ui| {
         ui.label("排序:");
         ui.selectable_value(sort_by, SortBy::Size, "按大小");
@@ -54,7 +57,7 @@ pub fn show(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add_sized([100.0, 20.0], egui::Label::new("大小").selectable(false));
-                ui.label("文件(悬停看完整路径)");
+                ui.label("文件(悬停看完整路径,右键更多操作)");
             });
             ui.separator();
             for (i, hit) in rows.iter().take(RENDER_LIMIT).enumerate() {
@@ -85,9 +88,41 @@ pub fn show(
                             [96.0, 18.0],
                             egui::Label::new(human_size(hit.size)).selectable(false),
                         );
-                        ui.strong(name).on_hover_text(hit.path.display().to_string());
+                        // 文件名标签:click 语义使右键可弹出上下文菜单
+                        let path = hit.path.clone();
+                        let resp = ui.add(
+                            egui::Label::new(egui::RichText::new(name).strong())
+                                .sense(egui::Sense::click()),
+                        );
+                        resp.on_hover_text(path.display().to_string())
+                            .context_menu(|ui| row_action = show_row_menu(&path, ui));
                     });
                 });
             }
         });
+    row_action
+}
+
+/// 右键菜单三项内容;返回被点击的动作(未点击为 None)
+pub(crate) fn show_row_menu(path: &std::path::Path, ui: &mut egui::Ui) -> Option<RowAction> {
+    let mut action = None;
+    if ui.button("复制路径").clicked() {
+        action = Some(RowAction::Copy(path.to_path_buf()));
+        ui.close();
+    }
+    if ui.button("在资源管理器中打开").clicked() {
+        action = Some(RowAction::Reveal(path.to_path_buf()));
+        ui.close();
+    }
+    ui.separator();
+    if ui
+        .add(egui::Button::new(
+            egui::RichText::new("删除到回收站").color(egui::Color32::LIGHT_RED),
+        ))
+        .clicked()
+    {
+        action = Some(RowAction::Delete(path.to_path_buf()));
+        ui.close();
+    }
+    action
 }
