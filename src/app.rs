@@ -487,9 +487,6 @@ impl eframe::App for AnalyseApp {
 
         egui::Panel::bottom("status").show(ui, |ui| {
             status_bar::show(&self.state, &self.progress, ui);
-            if let Some((m, _)) = &self.message {
-                ui.colored_label(egui::Color32::LIGHT_GREEN, m);
-            }
         });
         // 中央面板:Tab 状态先在局部复制渲染,结束后写回,避免借用冲突
         let mut tab = self.tab;
@@ -591,6 +588,31 @@ impl eframe::App for AnalyseApp {
         }
         for a in [left_out.action, panel_action].into_iter().flatten() {
             self.handle_row_action(a, ui.ctx());
+        }
+
+        // 右下角浮动反馈气泡:最后 1 秒线性淡出,5 秒后由 logic() 清除
+        if let Some((m, at)) = self.message.clone() {
+            let alpha = ((5.0f32 - at.elapsed().as_secs_f32()) / 1.0).clamp(0.0, 1.0);
+            let win_fill = ui.visuals().window_fill();
+            egui::Area::new(egui::Id::new("toast"))
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -56.0])
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::new()
+                        .fill(win_fill.linear_multiply(0.1 + 0.85 * alpha))
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            egui::Color32::LIGHT_GREEN.linear_multiply(alpha),
+                        ))
+                        .corner_radius(8.0)
+                        .inner_margin(egui::Margin::same(10))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(m)
+                                    .color(egui::Color32::LIGHT_GREEN.linear_multiply(alpha)),
+                            );
+                        });
+                });
         }
 
         // Delete 键触发确认对话框(仅在有勾选时)
