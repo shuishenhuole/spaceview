@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::engine::scanner::{FileHit, ScanResult};
 use crate::engine::tree::human_size;
-use crate::ui::RowAction;
+use crate::ui::{Filter, RowAction};
 
 /// 排序方式
 #[derive(PartialEq, Clone, Copy)]
@@ -20,9 +20,21 @@ pub fn show(
     result: &ScanResult,
     sort_by: &mut SortBy,
     selected: &mut Vec<PathBuf>,
+    filter: &Filter,
     ui: &mut egui::Ui,
 ) -> Option<RowAction> {
     let mut row_action: Option<RowAction> = None;
+    // 按过滤条件收集可见行(引用,不复制数据)
+    let mut rows: Vec<&FileHit> = result
+        .top_files
+        .iter()
+        .filter(|h| filter.matches_file(&h.path, h.size))
+        .collect();
+    if *sort_by == SortBy::Name {
+        rows.sort_by(|a, b| a.path.cmp(&b.path));
+    } else {
+        // 扫描结果本身按大小降序;过滤后保持原顺序
+    }
     ui.horizontal(|ui| {
         ui.label("排序:");
         ui.selectable_value(sort_by, SortBy::Size, "按大小");
@@ -32,8 +44,8 @@ pub fn show(
         }
         ui.label(
             egui::RichText::new(format!(
-                "(共 {} 条,渲染前 {} 条;勾选后可按 Delete 删除)",
-                result.top_files.len(),
+                "(匹配 {} 条,渲染前 {} 条;勾选后可按 Delete 删除)",
+                rows.len(),
                 RENDER_LIMIT
             ))
             .weak()
@@ -41,17 +53,15 @@ pub fn show(
         );
     });
 
-    // 按路径排序时临时复制排序(数据只在 Done 状态,量可控)
-    let sorted_name: Vec<FileHit>;
-    let rows: &[FileHit] = if *sort_by == SortBy::Name {
-        let mut v = result.top_files.clone();
-        v.sort_by(|a, b| a.path.cmp(&b.path));
-        sorted_name = v;
-        &sorted_name
-    } else {
-        &result.top_files
-    };
-
+    if rows.is_empty() {
+        // 过滤后无匹配
+        ui.label(
+            egui::RichText::new("无匹配项,请调整搜索词或大小阈值")
+                .weak()
+                .italics(),
+        );
+        return row_action;
+    }
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {

@@ -3,19 +3,72 @@
 
 use crate::engine::tree::{Tree, human_size, ROOT};
 use crate::ui::files_panel::show_row_menu;
-use crate::ui::RowAction;
+use crate::ui::{Filter, RowAction};
 
 /// 每节点最多渲染的子目录数(整盘大目录防卡顿,其余按“未列出”提示)
 const MAX_CHILDREN_SHOWN: usize = 200;
+/// 过滤模式下最多显示的命中目录数
+const FLAT_LIMIT: usize = 500;
 
-/// 面板入口:标题 + 双向滚动区;返回本帧右键菜单触发的动作
-pub fn show(ui: &mut egui::Ui, tree: &Tree) -> Option<RowAction> {
+/// 面板入口:标题 + 双向滚动区;返回本帧右键菜单触发的动作。
+/// 过滤激活时切换为“搜索结果”扁平列表,不再递归展开树。
+pub fn show(ui: &mut egui::Ui, tree: &Tree, filter: &Filter) -> Option<RowAction> {
+    if filter.active() {
+        return show_flat(ui, tree, filter);
+    }
     ui.strong("目录树");
     let mut row_action = None;
     egui::ScrollArea::both().show(ui, |ui| {
         let root_size = tree.nodes[ROOT as usize].size;
         show_dir_rows(ui, tree, ROOT, root_size, 0, &mut row_action);
     });
+    row_action
+}
+
+/// 过滤模式:全节点扫一遍,按名称+大小阈值命中,扁平显示(上限 FLAT_LIMIT 条)
+fn show_flat(ui: &mut egui::Ui, tree: &Tree, filter: &Filter) -> Option<RowAction> {
+    ui.strong(format!("目录树 — 搜索 “{}”", filter.needle));
+    let mut row_action = None;
+    let mut shown = 0usize;
+    let mut total = 0usize;
+    egui::ScrollArea::both().show(ui, |ui| {
+        // 跳过根节点自身(索引 0),按 Arena 创建序遍历
+        for (i, node) in tree.nodes.iter().enumerate().skip(1) {
+            if !filter.matches_dir(&node.name, node.size) {
+                continue;
+            }
+            total += 1;
+            if shown >= FLAT_LIMIT {
+                continue;
+            }
+            shown += 1;
+            let path = tree.dir_path(i as u32);
+            let label = format!(
+                "{}  {}{}",
+                node.name,
+                human_size(node.size),
+                if node.denied { " [受限]" } else { "" }
+            );
+            let resp = ui.add(
+                egui::Label::new(egui::RichText::new(label)).sense(egui::Sense::click()),
+            );
+            resp.on_hover_text(path.display().to_string())
+                .context_menu(|ui| {
+                    if let Some(a) = show_row_menu(&path, ui) {
+                        row_action = Some(a);
+                    }
+                });
+        }
+    });
+    if total == 0 {
+        ui.label(egui::RichText::new("无匹配目录").weak().italics());
+    } else if total > shown {
+        ui.label(
+            egui::RichText::new(format!("共命中 {total} 个目录,仅显示前 {shown} 个"))
+                .weak()
+                .small(),
+        );
+    }
     row_action
 }
 

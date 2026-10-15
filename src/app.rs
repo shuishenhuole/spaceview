@@ -9,7 +9,8 @@ use std::sync::Arc;
 use crate::engine::scanner::{self, ScanEvent, ScanResult};
 use crate::engine::tree::ROOT;
 use crate::ui::{
-    extension_panel, files_panel, status_bar, toolbar, tree_panel, treemap_panel, RowAction,
+    extension_panel, files_panel, status_bar, toolbar, tree_panel, treemap_panel, Filter,
+    RowAction,
 };
 
 /// 中央面板的 Tab 页
@@ -64,6 +65,10 @@ pub struct AnalyseApp {
     selected: Vec<PathBuf>,
     /// 是否弹出删除确认框
     confirm_delete: bool,
+    /// 搜索关键词(不区分大小写,匹配目录名/文件完整路径)
+    filter_text: String,
+    /// 大小阈值,仅显示不小于该值的条目;0=不限
+    filter_min_bytes: u64,
     /// 最近一次操作反馈(如删除结果),显示在状态栏,约 5 秒后自动消失
     pub(crate) message: Option<(String, std::time::Instant)>,
 }
@@ -95,6 +100,8 @@ impl Default for AnalyseApp {
             drill: vec![ROOT],
             selected: Vec::new(),
             confirm_delete: false,
+            filter_text: String::new(),
+            filter_min_bytes: 0,
             message: None,
         }
     }
@@ -106,6 +113,16 @@ fn list_drives() -> Vec<PathBuf> {
         .map(|c| PathBuf::from(format!("{c}:\\")))
         .filter(|p| p.is_dir())
         .collect()
+}
+
+/// 大小阈值下拉的显示文案
+fn size_threshold_label(v: u64) -> String {
+    match v {
+        0 => "不限大小".to_owned(),
+        10_485_760 => "> 10MB".to_owned(),
+        104_857_600 => "> 100MB".to_owned(),
+        _ => "> 1GB".to_owned(),
+    }
 }
 
 impl AnalyseApp {
@@ -358,13 +375,18 @@ impl eframe::App for AnalyseApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // 每帧构建过滤条件,树面板与文件列表共用
+        let filter = Filter {
+            needle: self.filter_text.trim().to_lowercase(),
+            min_bytes: self.filter_min_bytes,
+        };
         // 扫描完成时:左侧目录树面板(右键动作经 left_action 回传)
         let mut left_action: Option<RowAction> = None;
         if let AppState::Done(result) = &self.state {
             egui::Panel::left("tree_panel")
                 .default_size(420.0)
                 .show(ui, |ui| {
-                    left_action = tree_panel::show(ui, &result.tree);
+                    left_action = tree_panel::show(ui, &result.tree, &filter);
                 });
         }
 
@@ -380,6 +402,33 @@ impl eframe::App for AnalyseApp {
             .inner;
         if let Some(a) = action {
             self.handle_toolbar_action(a);
+        }
+
+        // 过滤栏:仅在有扫描结果时显示(搜索框 + 大小阈值下拉)
+        if matches!(self.state, AppState::Done(_)) {
+            egui::Panel::top("filter_bar").show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("过滤:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.filter_text)
+                            .hint_text("搜索目录/文件名")
+                            .desired_width(220.0),
+                    );
+                    if !self.filter_text.is_empty() && ui.button("✕").clicked() {
+                        self.filter_text.clear();
+                    }
+                    let mut min = self.filter_min_bytes;
+                    egui::ComboBox::from_id_salt("size_threshold")
+                        .selected_text(size_threshold_label(min))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut min, 0, "不限大小");
+                            ui.selectable_value(&mut min, 10 * 1024 * 1024, "> 10MB");
+                            ui.selectable_value(&mut min, 100 * 1024 * 1024, "> 100MB");
+                            ui.selectable_value(&mut min, 1024 * 1024 * 1024, "> 1GB");
+                        });
+                    self.filter_min_bytes = min;
+                });
+            });
         }
 
         egui::Panel::bottom("status").show(ui, |ui| {
@@ -411,7 +460,8 @@ impl eframe::App for AnalyseApp {
                 ui.separator();
                 match tab {
                     Tab::TopFiles => {
-                        panel_action = files_panel::show(result, &mut file_sort, &mut selected, ui)
+                        panel_action =
+                            files_panel::show(result, &mut file_sort, &mut selected, &filter, ui)
                     }
                     Tab::Extensions => extension_panel::show(result, ui),
                     Tab::Treemap => {
