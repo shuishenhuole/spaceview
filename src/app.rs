@@ -83,6 +83,10 @@ pub struct AnalyseApp {
     applied_dark: Option<bool>,
     /// 已应用到原生标题栏(DWM)的主题,变化时才下发一次
     applied_titlebar: Option<bool>,
+    /// 目录树面板出现淡入动画的起点,None=无动画
+    tree_fade: Option<std::time::Instant>,
+    /// 上一帧是否展示了结果面板,用于检测"出现"时刻
+    showing_result: bool,
 }
 
 impl Default for AnalyseApp {
@@ -121,6 +125,8 @@ impl Default for AnalyseApp {
             dark: true,
             applied_dark: None,
             applied_titlebar: None,
+            tree_fade: None,
+            showing_result: false,
         }
     }
 }
@@ -661,12 +667,35 @@ impl eframe::App for AnalyseApp {
             action: None,
             nav: None,
         };
+        // 结果面板从"无"到"有"的瞬间触发目录树淡入动画
+        let has_result = self.view_ref().is_some();
+        if has_result && !self.showing_result {
+            self.tree_fade = Some(std::time::Instant::now());
+        }
+        self.showing_result = has_result;
         if let Some(result) = self.view_ref() {
-            egui::Panel::left("tree_panel")
+            let resp = egui::Panel::left("tree_panel")
                 .default_size(420.0)
                 .show(ui, |ui| {
                     left_out = tree_panel::show(ui, &result.tree, &filter);
                 });
+            if let Some(t0) = self.tree_fade {
+                let t = t0.elapsed().as_secs_f32() / 0.28;
+                if t < 1.0 {
+                    // 用面板底色以递减不透明度覆盖,形成内容淡入效果
+                    let [r, g, b, _] = ui.visuals().panel_fill.to_array();
+                    let cover = egui::Color32::from_rgba_unmultiplied(
+                        r,
+                        g,
+                        b,
+                        ((1.0 - t).clamp(0.0, 1.0) * 255.0) as u8,
+                    );
+                    ui.painter().rect_filled(resp.response.rect, 0.0, cover);
+                    ui.ctx().request_repaint();
+                } else {
+                    self.tree_fade = None;
+                }
+            }
         }
 
         // 工具栏(渲染 → 动作 → 执行)
