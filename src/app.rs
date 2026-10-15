@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::scanner::{self, ScanEvent, ScanResult};
-use crate::tree::human_size;
+use crate::tree::{human_size, Tree};
 
 /// 扫描目标来源:盘符 或 用户选择的任意文件夹
 #[derive(Clone, PartialEq)]
@@ -79,6 +79,51 @@ fn list_drives() -> Vec<PathBuf> {
         .map(|c| PathBuf::from(format!("{c}:\\")))
         .filter(|p| p.is_dir())
         .collect()
+}
+
+/// 每节点最多渲染的子目录数(整盘大目录防卡顿,其余按“未列出”提示)
+const MAX_CHILDREN_SHOWN: usize = 200;
+
+/// 递归渲染一个目录节点的子项:名称 + 大小 + 占根目录比例条
+fn show_dir_rows(ui: &mut egui::Ui, tree: &Tree, idx: u32, root_size: u64, depth: usize) {
+    let mut kids: Vec<u32> = tree.nodes[idx as usize].children.clone();
+    kids.sort_by_key(|c| std::cmp::Reverse(tree.nodes[*c as usize].size));
+    let total = kids.len();
+    for &c in kids.iter().take(MAX_CHILDREN_SHOWN) {
+        let node = &tree.nodes[c as usize];
+        let pct = if root_size > 0 {
+            node.size as f32 / root_size as f32
+        } else {
+            0.0
+        };
+        let denied_tag = if node.denied { " [受限]" } else { "" };
+        let label = format!(
+            "{}  {}  {:.1}%{}",
+            node.name,
+            human_size(node.size),
+            pct * 100.0,
+            denied_tag
+        );
+        if node.children.is_empty() {
+            ui.add(
+                egui::ProgressBar::new(pct)
+                    .text(label)
+                    .desired_width(ui.available_width().min(360.0)),
+            );
+        } else {
+            egui::CollapsingHeader::new(label)
+                .id_salt(("dir", c))
+                .default_open(depth == 0 && node.size > 0)
+                .show(ui, |ui| show_dir_rows(ui, tree, c, root_size, depth + 1));
+        }
+    }
+    if total > MAX_CHILDREN_SHOWN {
+        ui.label(egui::RichText::new(format!(
+            "… 还有 {} 个较小目录未列出",
+            total - MAX_CHILDREN_SHOWN
+        ))
+        .weak());
+    }
 }
 
 impl AnalyseApp {
@@ -314,6 +359,18 @@ impl eframe::App for AnalyseApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // 扫描完成时:左侧目录树面板(可折叠、带大小占比条)
+        if let AppState::Done(result) = &self.state {
+            egui::Panel::left("tree_panel")
+                .default_size(420.0)
+                .show(ui, |ui| {
+                    ui.strong("目录树");
+                    egui::ScrollArea::both().show(ui, |ui| {
+                        show_dir_rows(ui, &result.tree, crate::tree::ROOT, result.tree.nodes[crate::tree::ROOT as usize].size, 0);
+                    });
+                });
+        }
+
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| self.show_toolbar(ui));
         });
