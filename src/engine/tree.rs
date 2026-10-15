@@ -15,6 +15,7 @@ pub struct DirNode {
 }
 
 /// Arena 存储的目录树
+#[derive(Clone)]
 pub struct Tree {
     pub root_path: PathBuf, // 扫描根,如 C:\
     pub nodes: Vec<DirNode>,

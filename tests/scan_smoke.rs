@@ -29,6 +29,7 @@ fn scan_small_tree() {
     let result = loop {
         match rx.recv().unwrap() {
             ScanEvent::Tick { .. } => {}
+            ScanEvent::Snapshot(_) => {}
             ScanEvent::Done(r) => break r,
             ScanEvent::Cancelled => panic!("不应取消"),
             ScanEvent::Failed(e) => panic!("扫描失败: {e}"),

@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(rustc --version && cargo --version)"
+      "Bash(rustc --version && cargo --version)",
+      "Bash(grep -n \"sync_window_theme\" \"$USERPROFILE/.cargo/registry/src/\"*/egui-0.36*/src/data/input.rs \"$USERPROFILE/.cargo/registry/src/\"*/egui-0.36*/src/context.rs 2>/dev/null | head; grep -rn \"sync_window_theme\" \"$USERPROFILE/.cargo/registry/src/\"*/egui-0.36*/src/ | grep -v \"//\" | head)"
     ]
   }
 }

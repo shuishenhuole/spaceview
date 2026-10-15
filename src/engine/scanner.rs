@@ -55,9 +55,78 @@ pub enum ScanEvent {
         bytes: u64,
         cur: String,
     },
+    /// 扫描过程中的部分快照(树已聚合、TopN/扩展名为当前值),供 UI 实时展示
+    Snapshot(Box<ScanResult>),
     Done(Box<ScanResult>),
     Cancelled,
     Failed(String),
+}
+
+/// 克隆当前树并做自底向上聚合,得到"当前已扫描内容"的完整大小视图。
+/// 扫描主循环中 node.size 只含直属文件,聚合放在克隆上进行,避免拖慢主遍历。
+fn aggregate_snapshot(src: &Tree) -> Tree {
+    let mut c = src.clone();
+    for i in (1..c.nodes.len()).rev() {
+        let (parent, size, count) = {
+            let n = &c.nodes[i];
+            (n.parent, n.size, n.file_count)
+        };
+        if let Some(p) = parent {
+            let pn = &mut c.nodes[p as usize];
+            pn.size += size;
+            pn.file_count += count;
+        }
+    }
+    c
+}
+
+/// 从当前 TopN 堆与扩展名表构建部分结果(不消耗主数据结构)
+#[allow(clippy::type_complexity)]
+fn build_partial(
+    tree: &Tree,
+    top: &BinaryHeap<(Reverse<u64>, PathBuf)>,
+    exts: &HashMap<String, (u64, u64)>,
+    node_map: &HashMap<PathBuf, u32>,
+    denied: &Mutex<Vec<PathBuf>>,
+    files: u64,
+    bytes: u64,
+) -> ScanResult {
+    let mut top_files: Vec<FileHit> = top
+        .clone()
+        .into_vec()
+        .into_iter()
+        .map(|(Reverse(size), path)| {
+            let dir_idx = node_map
+                .get(path.parent().unwrap_or(Path::new("")))
+                .copied()
+                .unwrap_or(crate::engine::tree::ROOT);
+            FileHit {
+                path,
+                size,
+                dir_idx,
+            }
+        })
+        .collect();
+    top_files.sort_unstable_by(|a, b| b.size.cmp(&a.size));
+
+    let mut ext_stats: Vec<ExtStat> = exts
+        .iter()
+        .map(|(ext, (count, bytes))| ExtStat {
+            ext: ext.clone(),
+            count: *count,
+            bytes: *bytes,
+        })
+        .collect();
+    ext_stats.sort_unstable_by(|a, b| b.bytes.cmp(&a.bytes));
+
+    ScanResult {
+        tree: aggregate_snapshot(tree),
+        top_files,
+        ext_stats,
+        denied: denied.lock().unwrap().clone(),
+        total_files: files,
+        total_bytes: bytes,
+    }
 }
 
 /// 启动后台扫描,返回事件接收端;cancel 置 true 后扫描在下一条目处中止
@@ -91,6 +160,7 @@ fn run(root: PathBuf, cancel: Arc<AtomicBool>, tx: mpsc::Sender<ScanEvent>) -> R
     let mut bytes: u64 = 0;
     let mut cur = String::new();
     let mut last_tick = Instant::now();
+    let mut last_snap = Instant::now();
 
     let denied_ref = &denied;
     let walk = jwalk::WalkDirGeneric::<((), Option<u64>)>::new(&root)
@@ -201,6 +271,13 @@ fn run(root: PathBuf, cancel: Arc<AtomicBool>, tx: mpsc::Sender<ScanEvent>) -> R
             {
                 return Ok(()); // UI 已关闭
             }
+        }
+        // 每秒推送一次部分快照,让 UI 在扫描过程中即可展示已扫描内容
+        if last_snap.elapsed() > Duration::from_secs(1) {
+            last_snap = Instant::now();
+            let _ = tx.send(ScanEvent::Snapshot(Box::new(build_partial(
+                &tree, &top, &exts, &node_map, &denied, files, bytes,
+            ))));
         }
     }
 
