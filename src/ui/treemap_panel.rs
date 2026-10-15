@@ -80,17 +80,36 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
             egui::StrokeKind::Inside,
         );
 
-        // 文字:仅在矩形够大时绘制,宽度不足手动截断
+        // 文字:仅在矩形够大时绘制,宽度不足手动截断;
+        // 高度充足时名字与占用大小分两行,空间不够则合并为一行
         if r.width() > 70.0 && r.height() > 18.0 {
             let max_chars = (r.width() / 7.5).clamp(3.0, 60.0) as usize;
             let short: String = label.chars().take(max_chars).collect();
-            painter.text(
-                r.center(),
-                egui::Align2::CENTER_CENTER,
-                short,
-                egui::FontId::proportional(12.0),
-                ui.visuals().strong_text_color(),
-            );
+            let size_str = human_size(size);
+            if r.height() > 36.0 {
+                painter.text(
+                    r.center() - egui::vec2(0.0, 8.0),
+                    egui::Align2::CENTER_CENTER,
+                    &short,
+                    egui::FontId::proportional(12.0),
+                    ui.visuals().strong_text_color(),
+                );
+                painter.text(
+                    r.center() + egui::vec2(0.0, 9.0),
+                    egui::Align2::CENTER_CENTER,
+                    &size_str,
+                    egui::FontId::proportional(11.0),
+                    ui.visuals().text_color(),
+                );
+            } else {
+                painter.text(
+                    r.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{short} · {size_str}"),
+                    egui::FontId::proportional(12.0),
+                    ui.visuals().strong_text_color(),
+                );
+            }
         }
 
         // 交互层:左键下钻 + 悬停详情 + 右键菜单
