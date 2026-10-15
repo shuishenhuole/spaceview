@@ -21,12 +21,16 @@ pub fn show(state: &AppState, progress: &Progress, ui: &mut egui::Ui) {
             let elapsed = progress.started.map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.0);
             ui.horizontal(|ui| {
                 ui.spinner();
+                // 附扫描速度,观感上替代无法预知的总进度
+                let secs = elapsed.max(0.5) as f64;
                 ui.label(format!(
-                    "已扫描 {} 个目录 / {} 个文件,共 {} — {:.1}s",
+                    "已扫描 {} 个目录 / {} 个文件,共 {} — {:.1}s · {:.0} 文件/秒 · {:.1} MB/秒",
                     progress.dirs,
                     progress.files,
                     human_size(progress.bytes),
-                    elapsed
+                    elapsed,
+                    progress.files as f64 / secs,
+                    progress.bytes as f64 / secs / 1_048_576.0
                 ));
             });
             ui.label(

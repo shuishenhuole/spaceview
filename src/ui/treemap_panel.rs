@@ -41,6 +41,8 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
     );
     let mut clicked = None;
     let mut row_action: Option<RowAction> = None;
+    // 当前目录总大小,用于色块悬停占比
+    let cur_size = tree.nodes[current as usize].size;
 
     for (n, (marker, r)) in laid.iter().enumerate() {
         let (label, size, count_tag) = match marker {
@@ -103,12 +105,23 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
                 clicked = Some(*idx);
             }
         }
+        let pct = size as f32 / cur_size.max(1) as f32 * 100.0;
         let resp2 = resp.on_hover_text(format!(
-            "{label}\n{}\n{}  {}",
+            "{label}\n{}\n{}  {} · 占当前视图 {:.1}%",
             menu_path.display(),
             human_size(size),
-            count_tag
+            count_tag,
+            pct
         ));
+        // 悬停块加亮边框
+        if resp2.hovered() {
+            painter.rect_stroke(
+                *r,
+                1.0,
+                egui::Stroke::new(2.0, ui.visuals().strong_text_color()),
+                egui::StrokeKind::Inside,
+            );
+        }
         // 灰色块不提供删除(删目录会把直属文件一起删,语义留给具体目录块)
         if marker.is_some() {
             resp2.context_menu(|ui| {
