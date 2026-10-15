@@ -10,25 +10,34 @@ const MAX_CHILDREN_SHOWN: usize = 200;
 /// 过滤模式下最多显示的命中目录数
 const FLAT_LIMIT: usize = 500;
 
-/// 面板入口:标题 + 双向滚动区;返回本帧右键菜单触发的动作。
+/// 树面板对本帧的回报:右键动作 + 单击导航到的目录索引(联动 Treemap)
+pub struct TreePanelOut {
+    pub action: Option<RowAction>,
+    pub nav: Option<u32>,
+}
+
+/// 面板入口:标题 + 双向滚动区。
 /// 过滤激活时切换为“搜索结果”扁平列表,不再递归展开树。
-pub fn show(ui: &mut egui::Ui, tree: &Tree, filter: &Filter) -> Option<RowAction> {
+pub fn show(ui: &mut egui::Ui, tree: &Tree, filter: &Filter) -> TreePanelOut {
+    let mut out = TreePanelOut {
+        action: None,
+        nav: None,
+    };
     if filter.active() {
-        return show_flat(ui, tree, filter);
+        show_flat(ui, tree, filter, &mut out);
+        return out;
     }
     ui.strong("目录树");
-    let mut row_action = None;
     egui::ScrollArea::both().show(ui, |ui| {
         let root_size = tree.nodes[ROOT as usize].size;
-        show_dir_rows(ui, tree, ROOT, root_size, 0, &mut row_action);
+        show_dir_rows(ui, tree, ROOT, root_size, 0, &mut out);
     });
-    row_action
+    out
 }
 
 /// 过滤模式:全节点扫一遍,按名称+大小阈值命中,扁平显示(上限 FLAT_LIMIT 条)
-fn show_flat(ui: &mut egui::Ui, tree: &Tree, filter: &Filter) -> Option<RowAction> {
+fn show_flat(ui: &mut egui::Ui, tree: &Tree, filter: &Filter, out: &mut TreePanelOut) {
     ui.strong(format!("目录树 — 搜索 “{}”", filter.needle));
-    let mut row_action = None;
     let mut shown = 0usize;
     let mut total = 0usize;
     egui::ScrollArea::both().show(ui, |ui| {
@@ -52,10 +61,13 @@ fn show_flat(ui: &mut egui::Ui, tree: &Tree, filter: &Filter) -> Option<RowActio
             let resp = ui.add(
                 egui::Label::new(egui::RichText::new(label)).sense(egui::Sense::click()),
             );
-            resp.on_hover_text(path.display().to_string())
+            if resp.clicked() {
+                out.nav = Some(i as u32);
+            }
+            resp.on_hover_text(format!("{}\n单击在 Treemap 中定位", path.display()))
                 .context_menu(|ui| {
                     if let Some(a) = show_row_menu(&path, ui) {
-                        row_action = Some(a);
+                        out.action = Some(a);
                     }
                 });
         }
@@ -69,17 +81,17 @@ fn show_flat(ui: &mut egui::Ui, tree: &Tree, filter: &Filter) -> Option<RowActio
                 .small(),
         );
     }
-    row_action
 }
 
-/// 递归渲染一个目录节点的子项:名称 + 大小 + 占根目录比例条
+/// 递归渲染一个目录节点的子项:名称 + 大小 + 占根目录比例条。
+/// 单击行 → 回报 nav(Treemap 联动下钻);右键 → 菜单动作。
 fn show_dir_rows(
     ui: &mut egui::Ui,
     tree: &Tree,
     idx: u32,
     root_size: u64,
     depth: usize,
-    row_action: &mut Option<RowAction>,
+    out: &mut TreePanelOut,
 ) {
     let mut kids: Vec<u32> = tree.nodes[idx as usize].children.clone();
     kids.sort_by_key(|c| std::cmp::Reverse(tree.nodes[*c as usize].size));
@@ -106,20 +118,32 @@ fn show_dir_rows(
                     .text(label)
                     .desired_width(ui.available_width().min(360.0)),
             );
-            resp.context_menu(|ui| {
+            // ProgressBar 本身无 click 语义,叠一层交互矩形承接单击与右键
+            let click = ui.interact(
+                resp.rect,
+                ui.id().with(("trow", c)),
+                egui::Sense::click(),
+            );
+            if click.clicked() {
+                out.nav = Some(c);
+            }
+            click.context_menu(|ui| {
                 if let Some(a) = show_row_menu(&dir_path, ui) {
-                    *row_action = Some(a);
+                    out.action = Some(a);
                 }
             });
         } else {
             let resp = egui::CollapsingHeader::new(label)
                 .id_salt(("dir", c))
                 .default_open(depth == 0 && node.size > 0)
-                .show(ui, |ui| show_dir_rows(ui, tree, c, root_size, depth + 1, row_action))
+                .show(ui, |ui| show_dir_rows(ui, tree, c, root_size, depth + 1, out))
                 .header_response;
+            if resp.clicked() {
+                out.nav = Some(c);
+            }
             resp.context_menu(|ui| {
                 if let Some(a) = show_row_menu(&dir_path, ui) {
-                    *row_action = Some(a);
+                    out.action = Some(a);
                 }
             });
         }
