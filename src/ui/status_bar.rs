@@ -10,6 +10,20 @@ pub struct Progress {
     pub bytes: u64,
     pub cur: String,
     pub started: Option<std::time::Instant>,
+    /// 历史累计暂停时长(秒),从耗时统计中扣除
+    pub paused_secs: f32,
+    /// 本次暂停起点,未暂停时为 None
+    pub paused_at: Option<std::time::Instant>,
+}
+
+/// 有效扫描耗时:总流逝时间减去全部暂停区间
+fn active_elapsed(progress: &Progress) -> f32 {
+    let Some(t) = progress.started else { return 0.0 };
+    let mut e = t.elapsed().as_secs_f32() - progress.paused_secs;
+    if let Some(p) = progress.paused_at {
+        e -= p.elapsed().as_secs_f32();
+    }
+    e.max(0.0)
 }
 
 pub fn show(state: &AppState, progress: &Progress, ui: &mut egui::Ui) {
@@ -18,7 +32,8 @@ pub fn show(state: &AppState, progress: &Progress, ui: &mut egui::Ui) {
             ui.label("就绪:选择盘符或文件夹后点击“开始扫描”。");
         }
         AppState::Scanning { paused, .. } => {
-            let elapsed = progress.started.map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.0);
+            // 有效耗时扣除暂停区间,暂停中数字保持不动
+            let elapsed = active_elapsed(progress);
             ui.horizontal(|ui| {
                 if paused.load(std::sync::atomic::Ordering::Relaxed) {
                     // 暂停中不转圈,提示可继续
