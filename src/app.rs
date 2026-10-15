@@ -487,6 +487,18 @@ impl eframe::App for AnalyseApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // 主题变化时才重建 Visuals
         if self.applied_dark != Some(self.dark) {
+            // 关键:eframe 会把 ContextOptions 持久化并在启动时恢复
+            // (theme_preference:System + sync_window_theme:true),
+            // 系统主题同步会在窗口事件中重新覆盖手动 set_visuals 的结果,
+            // 导致浅色切换后面板(含状态栏)仍是深色。这里同步关闭系统主题跟随。
+            ctx.options_mut(|o| {
+                o.sync_window_theme = false;
+                o.theme_preference = if self.dark {
+                    egui::ThemePreference::Dark
+                } else {
+                    egui::ThemePreference::Light
+                };
+            });
             ctx.set_visuals(if self.dark {
                 egui::Visuals::dark()
             } else {
