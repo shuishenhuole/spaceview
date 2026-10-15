@@ -90,7 +90,12 @@ pub fn show(view: &ToolbarView, ui: &mut egui::Ui) -> Option<ToolbarAction> {
             if ui.button(if view.paused { "继续" } else { "暂停" }).clicked() {
                 action = Some(ToolbarAction::TogglePause);
             }
-            ui.spinner();
+            // 暂停时静态图标替代转圈,避免视觉上仍在运行
+            if view.paused {
+                ui.label("⏸");
+            } else {
+                ui.spinner();
+            }
         } else if ui.add(egui::Button::new("开始扫描")).clicked() {
             action = Some(ToolbarAction::StartScan);
         }

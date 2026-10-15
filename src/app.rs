@@ -106,6 +106,8 @@ impl Default for AnalyseApp {
                 bytes: 0,
                 cur: String::new(),
                 started: None,
+                paused_secs: 0.0,
+                paused_at: None,
             },
             tab: Tab::TopFiles,
             file_sort: files_panel::SortBy::Size,
@@ -185,6 +187,8 @@ impl AnalyseApp {
             bytes: 0,
             cur: String::new(),
             started: Some(std::time::Instant::now()),
+            paused_secs: 0.0,
+            paused_at: None,
         };
         // 新扫描从根视图重新开始,清空旧的下钻/勾选状态
         self.drill = vec![ROOT];
@@ -343,6 +347,12 @@ impl AnalyseApp {
                 if let AppState::Scanning { paused, .. } = &self.state {
                     let now = !paused.load(Ordering::Relaxed);
                     paused.store(now, Ordering::Relaxed);
+                    // 记录/结算暂停区间,让状态栏耗时与速度在暂停时冻结
+                    if now {
+                        self.progress.paused_at = Some(std::time::Instant::now());
+                    } else if let Some(p) = self.progress.paused_at.take() {
+                        self.progress.paused_secs += p.elapsed().as_secs_f32();
+                    }
                     self.set_message(if now {
                         "已暂停扫描,可随时继续".to_string()
                     } else {
