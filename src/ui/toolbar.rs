@@ -12,6 +12,8 @@ pub struct ToolbarView<'a> {
     /// 当前目标解析出的实际路径(用于预览)
     pub target_path: PathBuf,
     pub scanning: bool,
+    /// 当前是否深色主题(决定按钮文案)
+    pub dark: bool,
 }
 
 /// 用户点击产生的动作
@@ -20,6 +22,7 @@ pub enum ToolbarAction {
     OpenFolderPicker,
     StartScan,
     CancelScan,
+    ToggleTheme,
 }
 
 pub fn show(view: &ToolbarView, ui: &mut egui::Ui) -> Option<ToolbarAction> {
@@ -66,6 +69,11 @@ pub fn show(view: &ToolbarView, ui: &mut egui::Ui) -> Option<ToolbarAction> {
     );
 
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        // 主题切换(不受扫描状态影响)
+        let theme_label = if view.dark { "☀ 浅色" } else { "🌙 深色" };
+        if ui.button(theme_label).clicked() {
+            action = Some(ToolbarAction::ToggleTheme);
+        }
         if view.scanning {
             if ui
                 .add(egui::Button::new(

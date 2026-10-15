@@ -10,6 +10,7 @@ pub use app::AnalyseApp;
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_app_id("analyse") // Storage 持久化需要的应用标识
             .with_inner_size([1100.0, 720.0])
             .with_min_inner_size([800.0, 500.0])
             .with_title("磁盘空间分析"),
@@ -21,7 +22,14 @@ fn main() -> eframe::Result {
         Box::new(|cc| {
             // egui 默认字体不含 CJK,中文会显示为方块,启动时先注册系统字体
             setup_cjk_fonts(&cc.egui_ctx);
-            Ok(Box::new(AnalyseApp::default()))
+            let mut app = AnalyseApp::default();
+            // 读取上次保存的主题偏好
+            if let Some(storage) = cc.storage
+                && let Some(saved) = storage.get_string("theme")
+            {
+                app.dark = saved != "light";
+            }
+            Ok(Box::new(app))
         }),
     )
 }

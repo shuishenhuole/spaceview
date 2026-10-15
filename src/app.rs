@@ -71,6 +71,10 @@ pub struct AnalyseApp {
     filter_min_bytes: u64,
     /// 最近一次操作反馈(如删除结果),显示在状态栏,约 5 秒后自动消失
     pub(crate) message: Option<(String, std::time::Instant)>,
+    /// 深色主题开关(工具栏按钮切换,持久化到 eframe Storage)
+    pub(crate) dark: bool,
+    /// 已应用到 Context 的主题,变化时才 set_visuals,避免每帧重建
+    applied_dark: Option<bool>,
 }
 
 impl Default for AnalyseApp {
@@ -103,6 +107,8 @@ impl Default for AnalyseApp {
             filter_text: String::new(),
             filter_min_bytes: 0,
             message: None,
+            dark: true,
+            applied_dark: None,
         }
     }
 }
@@ -288,6 +294,7 @@ impl AnalyseApp {
                     cancel.store(true, Ordering::Relaxed);
                 }
             }
+            toolbar::ToolbarAction::ToggleTheme => self.dark = !self.dark,
         }
     }
 
@@ -363,6 +370,15 @@ fn reveal_in_explorer(path: &std::path::Path) -> std::io::Result<()> {
 impl eframe::App for AnalyseApp {
     /// 每帧先 logic(改状态、收线程事件,不画 UI),再 ui(构建界面)
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 主题变化时才重建 Visuals
+        if self.applied_dark != Some(self.dark) {
+            ctx.set_visuals(if self.dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            self.applied_dark = Some(self.dark);
+        }
         // 反馈消息 5 秒后自动消失
         if let Some((_, at)) = &self.message {
             if at.elapsed() > std::time::Duration::from_secs(5) {
@@ -429,6 +445,7 @@ impl eframe::App for AnalyseApp {
             target: &self.target,
             target_path: self.target_path(),
             scanning: self.is_scanning(),
+            dark: self.dark,
         };
         let action = egui::Panel::top("toolbar")
             .show(ui, |ui| ui.horizontal(|ui| toolbar::show(&view, ui)).inner)
@@ -607,5 +624,10 @@ impl eframe::App for AnalyseApp {
                 self.confirm_delete = false;
             }
         }
+    }
+
+    /// 周期性保存(eframe 自动调用):目前仅持久化主题选择
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        storage.set_string("theme", if self.dark { "dark" } else { "light" }.to_owned());
     }
 }
