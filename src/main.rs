@@ -1,3 +1,51 @@
-fn main() {
-    println!("Hello, world!");
+//! 程序入口:创建 eframe 窗口并注册中文字体。
+#![windows_subsystem = "windows"] // release 构建时不弹出控制台黑窗
+
+mod app;
+
+pub use app::AnalyseApp;
+
+fn main() -> eframe::Result {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1100.0, 720.0])
+            .with_min_inner_size([800.0, 500.0])
+            .with_title("磁盘空间分析"),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "磁盘空间分析",
+        options,
+        Box::new(|cc| {
+            // egui 默认字体不含 CJK,中文会显示为方块,启动时先注册系统字体
+            setup_cjk_fonts(&cc.egui_ctx);
+            Ok(Box::new(AnalyseApp::default()))
+        }),
+    )
+}
+
+/// 尝试加载 Windows 系统中文字体(微软雅黑优先,依次回退)
+fn setup_cjk_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    const CANDIDATES: [&str; 3] = [
+        "C:\\Windows\\Fonts\\msyh.ttc",
+        "C:\\Windows\\Fonts\\msyh.ttf",
+        "C:\\Windows\\Fonts\\simhei.ttf",
+    ];
+    for path in CANDIDATES {
+        if let Ok(data) = std::fs::read(path) {
+            fonts.font_data.insert(
+                "win_cjk".to_owned(),
+                egui::FontData::from_owned(data).into(),
+            );
+            // 追加到比例与等宽字体族末尾,作为中文缺字的回退
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                if let Some(list) = fonts.families.get_mut(&family) {
+                    list.push("win_cjk".to_owned());
+                }
+            }
+            break;
+        }
+    }
+    ctx.set_fonts(fonts);
 }
