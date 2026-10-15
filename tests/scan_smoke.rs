@@ -1,11 +1,14 @@
 //! 扫描引擎冒烟测试:构造小目录树,验证大小聚合与 TopN。
 
-#[path = "../src/tree.rs"]
-mod tree;
-#[path = "../src/scanner.rs"]
-mod scanner;
+mod engine {
+    #[path = "../../src/engine/tree.rs"]
+    pub mod tree;
+    #[path = "../../src/engine/scanner.rs"]
+    pub mod scanner;
+}
 
-use scanner::{ScanEvent, spawn_scan};
+use engine::scanner::{ScanEvent, spawn_scan};
+use engine::tree;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;

@@ -1,13 +1,13 @@
-//! 应用主界面:状态机(空闲 / 扫描中 / 完成)+ 工具栏 + 扫描进度。
+//! 编排层:应用状态机(空闲 / 扫描中 / 完成)+ 行为逻辑。
+//! 渲染代码在 ui/ 目录各面板中,数据结构在 engine/ 目录中。
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
-use std::time::Instant;
 
-use crate::scanner::{self, ScanEvent, ScanResult};
-use crate::tree::{human_size, Tree};
+use crate::engine::scanner::{self, ScanEvent, ScanResult};
+use crate::ui::{status_bar, toolbar, tree_panel};
 
 /// 扫描目标来源:盘符 或 用户选择的任意文件夹
 #[derive(Clone, PartialEq)]
@@ -34,19 +34,15 @@ pub enum AppState {
 /// 顶层应用结构体
 pub struct AnalyseApp {
     /// 本机枚举出的盘符,如 ["C:\\", "D:\\"]
-    drives: Vec<PathBuf>,
+    pub(crate) drives: Vec<PathBuf>,
     /// 当前选中的扫描目标
-    target: Target,
+    pub(crate) target: Target,
     /// rfd 文件夹对话框在工作线程的结果回传通道(对话框会阻塞,不能在主线程弹)
     folder_rx: Option<Receiver<Option<PathBuf>>>,
     /// 状态机
-    state: AppState,
-    /// 扫描进度快照(由 Tick 事件更新)
-    tick_dirs: u64,
-    tick_files: u64,
-    tick_bytes: u64,
-    tick_cur: String,
-    scan_started: Option<Instant>,
+    pub(crate) state: AppState,
+    /// 扫描进度快照(由 Tick 事件更新,状态栏渲染用)
+    pub(crate) progress: status_bar::Progress,
 }
 
 impl Default for AnalyseApp {
@@ -64,11 +60,13 @@ impl Default for AnalyseApp {
             target,
             folder_rx: None,
             state: AppState::Idle,
-            tick_dirs: 0,
-            tick_files: 0,
-            tick_bytes: 0,
-            tick_cur: String::new(),
-            scan_started: None,
+            progress: status_bar::Progress {
+                dirs: 0,
+                files: 0,
+                bytes: 0,
+                cur: String::new(),
+                started: None,
+            },
         }
     }
 }
@@ -81,54 +79,9 @@ fn list_drives() -> Vec<PathBuf> {
         .collect()
 }
 
-/// 每节点最多渲染的子目录数(整盘大目录防卡顿,其余按“未列出”提示)
-const MAX_CHILDREN_SHOWN: usize = 200;
-
-/// 递归渲染一个目录节点的子项:名称 + 大小 + 占根目录比例条
-fn show_dir_rows(ui: &mut egui::Ui, tree: &Tree, idx: u32, root_size: u64, depth: usize) {
-    let mut kids: Vec<u32> = tree.nodes[idx as usize].children.clone();
-    kids.sort_by_key(|c| std::cmp::Reverse(tree.nodes[*c as usize].size));
-    let total = kids.len();
-    for &c in kids.iter().take(MAX_CHILDREN_SHOWN) {
-        let node = &tree.nodes[c as usize];
-        let pct = if root_size > 0 {
-            node.size as f32 / root_size as f32
-        } else {
-            0.0
-        };
-        let denied_tag = if node.denied { " [受限]" } else { "" };
-        let label = format!(
-            "{}  {}  {:.1}%{}",
-            node.name,
-            human_size(node.size),
-            pct * 100.0,
-            denied_tag
-        );
-        if node.children.is_empty() {
-            ui.add(
-                egui::ProgressBar::new(pct)
-                    .text(label)
-                    .desired_width(ui.available_width().min(360.0)),
-            );
-        } else {
-            egui::CollapsingHeader::new(label)
-                .id_salt(("dir", c))
-                .default_open(depth == 0 && node.size > 0)
-                .show(ui, |ui| show_dir_rows(ui, tree, c, root_size, depth + 1));
-        }
-    }
-    if total > MAX_CHILDREN_SHOWN {
-        ui.label(egui::RichText::new(format!(
-            "… 还有 {} 个较小目录未列出",
-            total - MAX_CHILDREN_SHOWN
-        ))
-        .weak());
-    }
-}
-
 impl AnalyseApp {
     /// 当前选择解析为实际扫描根路径
-    fn target_path(&self) -> PathBuf {
+    pub(crate) fn target_path(&self) -> PathBuf {
         match &self.target {
             Target::Drive(i) => self
                 .drives
@@ -139,7 +92,7 @@ impl AnalyseApp {
         }
     }
 
-    /// 是否正在扫描(扫描中禁用重复开始/取消以外的操作)
+    /// 是否正在扫描(扫描中禁用目标修改)
     fn is_scanning(&self) -> bool {
         matches!(self.state, AppState::Scanning { .. })
     }
@@ -150,11 +103,13 @@ impl AnalyseApp {
         let cancel = Arc::new(AtomicBool::new(false));
         let rx = scanner::spawn_scan(root, cancel.clone());
         self.state = AppState::Scanning { rx, cancel };
-        self.tick_dirs = 0;
-        self.tick_files = 0;
-        self.tick_bytes = 0;
-        self.tick_cur = String::new();
-        self.scan_started = Some(Instant::now());
+        self.progress = status_bar::Progress {
+            dirs: 0,
+            files: 0,
+            bytes: 0,
+            cur: String::new(),
+            started: Some(std::time::Instant::now()),
+        };
     }
 
     /// 在工作线程打开系统文件夹选择对话框,避免阻塞 UI 重绘
@@ -186,10 +141,10 @@ impl AnalyseApp {
                     bytes,
                     cur,
                 }) => {
-                    self.tick_dirs = dirs;
-                    self.tick_files = files;
-                    self.tick_bytes = bytes;
-                    self.tick_cur = cur;
+                    self.progress.dirs = dirs;
+                    self.progress.files = files;
+                    self.progress.bytes = bytes;
+                    self.progress.cur = cur;
                 }
                 Ok(ScanEvent::Done(result)) => {
                     self.state = AppState::Done(result);
@@ -216,116 +171,16 @@ impl AnalyseApp {
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
 
-    /// 工具栏:盘符下拉 + 浏览 + 目标预览 + 开始/取消扫描
-    fn show_toolbar(&mut self, ui: &mut egui::Ui) {
-        let scanning = self.is_scanning();
-        let mut new_target: Option<Target> = None;
-        let mut do_scan = false;
-        let mut do_cancel = false;
-
-        // 盘符下拉(扫描中禁用)
-        let labels: Vec<String> = self
-            .drives
-            .iter()
-            .map(|d| d.to_string_lossy().into_owned())
-            .collect();
-        if let Target::Drive(i) = &self.target {
-            let current = labels.get(*i).cloned().unwrap_or_default();
-            ui.add_enabled_ui(!scanning, |ui| {
-                egui::ComboBox::from_id_salt("drive_combo")
-                    .selected_text(current)
-                    .show_ui(ui, |ui| {
-                        for (idx, label) in labels.iter().enumerate() {
-                            if ui.selectable_label(idx == *i, label).clicked() {
-                                new_target = Some(Target::Drive(idx));
-                            }
-                        }
-                    });
-            });
-        } else {
-            ui.label("自定义文件夹");
-        }
-
-        ui.separator();
-
-        ui.add_enabled_ui(!scanning, |ui| {
-            if ui.button("浏览…").clicked() {
-                self.open_folder_picker();
-            }
-        });
-
-        // 当前目标路径预览
-        ui.label(
-            egui::RichText::new(format!("扫描目标: {}", self.target_path().display()))
-                .color(ui.visuals().weak_text_color()),
-        );
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if scanning {
-                if ui.add(egui::Button::new(egui::RichText::new("取消").color(egui::Color32::LIGHT_RED))).clicked() {
-                    do_cancel = true;
+    /// 处理工具栏返回的动作
+    fn handle_toolbar_action(&mut self, action: toolbar::ToolbarAction) {
+        match action {
+            toolbar::ToolbarAction::SelectDrive(i) => self.target = Target::Drive(i),
+            toolbar::ToolbarAction::OpenFolderPicker => self.open_folder_picker(),
+            toolbar::ToolbarAction::StartScan => self.start_scan(),
+            toolbar::ToolbarAction::CancelScan => {
+                if let AppState::Scanning { cancel, .. } = &self.state {
+                    cancel.store(true, Ordering::Relaxed);
                 }
-                ui.spinner();
-            } else if ui.add(egui::Button::new("开始扫描")).clicked() {
-                do_scan = true;
-            }
-        });
-
-        if let Some(t) = new_target {
-            self.target = t;
-        }
-        if do_scan {
-            self.start_scan();
-        }
-        if do_cancel {
-            if let AppState::Scanning { cancel, .. } = &self.state {
-                cancel.store(true, Ordering::Relaxed);
-            }
-        }
-    }
-
-    /// 底部状态栏:扫描进度或结果摘要
-    fn show_status_bar(&self, ui: &mut egui::Ui) {
-        match &self.state {
-            AppState::Idle => {
-                ui.label("就绪:选择盘符或文件夹后点击“开始扫描”。");
-            }
-            AppState::Scanning { .. } => {
-                let elapsed = self
-                    .scan_started
-                    .map(|t| t.elapsed().as_secs_f32())
-                    .unwrap_or(0.0);
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(format!(
-                        "已扫描 {} 个目录 / {} 个文件,共 {} — {:?}s",
-                        self.tick_dirs,
-                        self.tick_files,
-                        human_size(self.tick_bytes),
-                        elapsed
-                    ));
-                });
-                ui.label(
-                    egui::RichText::new(format!("当前: {}", self.tick_cur))
-                        .small()
-                        .color(ui.visuals().weak_text_color()),
-                );
-            }
-            AppState::Done(result) => {
-                ui.horizontal(|ui| {
-                    ui.label(format!(
-                        "扫描完成:{} 个文件,合计 {}。受限目录 {} 项(已跳过)。",
-                        result.total_files,
-                        human_size(result.tree.nodes[crate::tree::ROOT as usize].size),
-                        result.denied.len(),
-                    ));
-                    if result.denied.len() >= 200 {
-                        ui.label("(样本上限 200)");
-                    }
-                });
-            }
-            AppState::Failed(err) => {
-                ui.colored_label(egui::Color32::LIGHT_RED, format!("扫描失败:{err}"));
             }
         }
     }
@@ -359,38 +214,45 @@ impl eframe::App for AnalyseApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // 扫描完成时:左侧目录树面板(可折叠、带大小占比条)
+        // 扫描完成时:左侧目录树面板
         if let AppState::Done(result) = &self.state {
             egui::Panel::left("tree_panel")
                 .default_size(420.0)
-                .show(ui, |ui| {
-                    ui.strong("目录树");
-                    egui::ScrollArea::both().show(ui, |ui| {
-                        show_dir_rows(ui, &result.tree, crate::tree::ROOT, result.tree.nodes[crate::tree::ROOT as usize].size, 0);
-                    });
-                });
+                .show(ui, |ui| tree_panel::show(ui, &result.tree));
         }
 
-        egui::Panel::top("toolbar").show(ui, |ui| {
-            ui.horizontal(|ui| self.show_toolbar(ui));
-        });
+        // 工具栏(渲染 → 动作 → 执行)
+        let view = toolbar::ToolbarView {
+            drives: &self.drives,
+            target: &self.target,
+            target_path: self.target_path(),
+            scanning: self.is_scanning(),
+        };
+        let action = egui::Panel::top("toolbar")
+            .show(ui, |ui| ui.horizontal(|ui| toolbar::show(&view, ui)).inner)
+            .inner;
+        if let Some(a) = action {
+            self.handle_toolbar_action(a);
+        }
+
         egui::Panel::bottom("status").show(ui, |ui| {
-            self.show_status_bar(ui);
+            status_bar::show(&self.state, &self.progress, ui)
         });
-        egui::CentralPanel::default().show(ui, |ui| {
-            match &self.state {
-                AppState::Scanning { .. } => {
-                    ui.centered_and_justified(|ui| ui.heading("正在扫描,请稍候…"));
-                }
-                AppState::Done(_) => {
-                    ui.centered_and_justified(|ui| {
-                        ui.label("扫描完成。树形视图与 Treemap 将在后续步骤展示。")
-                    });
-                }
-                _ => {
-                    ui.heading("磁盘空间分析工具");
-                    ui.label("选择扫描目标后点击“开始扫描”。");
-                }
+        egui::CentralPanel::default().show(ui, |ui| match &self.state {
+            AppState::Scanning { .. } => {
+                ui.centered_and_justified(|ui| ui.heading("正在扫描,请稍候…"));
+            }
+            AppState::Done(_) => {
+                ui.centered_and_justified(|ui| {
+                    ui.label("扫描完成。大文件列表与 Treemap 将在后续步骤展示。")
+                });
+            }
+            AppState::Failed(_) => {
+                ui.heading("磁盘空间分析工具");
+            }
+            _ => {
+                ui.heading("磁盘空间分析工具");
+                ui.label("选择扫描目标后点击“开始扫描”。");
             }
         });
     }

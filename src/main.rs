@@ -2,8 +2,8 @@
 #![windows_subsystem = "windows"] // release 构建时不弹出控制台黑窗
 
 mod app;
-mod scanner;
-mod tree;
+mod engine;
+mod ui;
 
 pub use app::AnalyseApp;
 

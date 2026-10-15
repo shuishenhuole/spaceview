@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::tree::{DirNode, Tree};
+use crate::engine::tree::{DirNode, Tree};
 
 pub const TOP_N_LIMIT: usize = 10_000;
 const DENIED_SAMPLES: usize = 200;
@@ -124,7 +124,7 @@ fn run(root: PathBuf, cancel: Arc<AtomicBool>, tx: mpsc::Sender<ScanEvent>) -> R
                     dirs += 1;
                     // 根目录节点在 Tree::new 中已建好(idx 0),直接复用,避免重复建根导致聚合断裂
                     if path == root {
-                        node_map.insert(path, crate::tree::ROOT);
+                        node_map.insert(path, crate::engine::tree::ROOT);
                         continue;
                     }
                     let parent = node_map.get(path.parent().unwrap_or(Path::new(""))).copied();
@@ -147,7 +147,7 @@ fn run(root: PathBuf, cancel: Arc<AtomicBool>, tx: mpsc::Sender<ScanEvent>) -> R
                     let dir_idx = match &last_parent {
                         Some((p, i)) if p == dir => *i,
                         _ => {
-                            let i = node_map.get(dir).copied().unwrap_or(crate::tree::ROOT);
+                            let i = node_map.get(dir).copied().unwrap_or(crate::engine::tree::ROOT);
                             last_parent = Some((dir.to_path_buf(), i));
                             i
                         }
@@ -224,7 +224,7 @@ fn run(root: PathBuf, cancel: Arc<AtomicBool>, tx: mpsc::Sender<ScanEvent>) -> R
             let dir_idx = node_map
                 .get(path.parent().unwrap_or(Path::new("")))
                 .copied()
-                .unwrap_or(crate::tree::ROOT);
+                .unwrap_or(crate::engine::tree::ROOT);
             FileHit { path, size, dir_idx }
         })
         .collect();
