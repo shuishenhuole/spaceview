@@ -60,6 +60,12 @@ pub struct AnalyseApp {
     file_sort: files_panel::SortBy,
     /// Treemap 下钻路径(节点索引栈,首元素为 ROOT)
     drill: Vec<u32>,
+    /// 大文件列表中勾选待删除的文件(以路径为键)
+    selected: Vec<PathBuf>,
+    /// 是否弹出删除确认框
+    confirm_delete: bool,
+    /// 最近一次操作反馈(如删除结果),显示在状态栏
+    pub(crate) message: Option<String>,
 }
 
 impl Default for AnalyseApp {
@@ -87,6 +93,9 @@ impl Default for AnalyseApp {
             tab: Tab::TopFiles,
             file_sort: files_panel::SortBy::Size,
             drill: vec![ROOT],
+            selected: Vec::new(),
+            confirm_delete: false,
+            message: None,
         }
     }
 }
@@ -192,9 +201,48 @@ impl AnalyseApp {
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
 
+    /// 将勾选文件删除到回收站,并同步回减目录树大小、TopN 与扩展名统计
+    fn perform_delete(&mut self) {
+        let AppState::Done(result) = &mut self.state else {
+            return;
+        };
+        let result = result.as_mut();
+        let mut ok = 0usize;
+        let mut errs: Vec<String> = Vec::new();
+        for path in std::mem::take(&mut self.selected) {
+            match trash::delete(&path) {
+                Ok(()) => {
+                    if let Some(pos) = result.top_files.iter().position(|h| h.path == path) {
+                        let (dir_idx, size) = {
+                            let hit = &result.top_files[pos];
+                            (hit.dir_idx, hit.size)
+                        };
+                        result.tree.subtract(dir_idx, size, 1);
+                        let ext = path
+                            .extension()
+                            .map(|e| e.to_string_lossy().to_lowercase())
+                            .unwrap_or_else(|| "(无扩展名)".to_string());
+                        if let Some(st) = result.ext_stats.iter_mut().find(|e| e.ext == ext) {
+                            st.count = st.count.saturating_sub(1);
+                            st.bytes = st.bytes.saturating_sub(size);
+                        }
+                        result.top_files.remove(pos);
+                    }
+                    ok += 1;
+                }
+                Err(e) => errs.push(format!("{} — {e}", path.display())),
+            }
+        }
+        self.message = Some(if errs.is_empty() {
+            format!("已删除 {ok} 个文件到回收站")
+        } else {
+            format!("已删除 {ok} 个;{} 个失败:{}", errs.len(), errs[0])
+        });
+        self.confirm_delete = false;
+    }
+
     /// 处理工具栏返回的动作
-    fn handle_toolbar_action(&mut self, action: toolbar::ToolbarAction) {
-        match action {
+    fn handle_toolbar_action(&mut self, action: toolbar::ToolbarAction) {        match action {
             toolbar::ToolbarAction::SelectDrive(i) => self.target = Target::Drive(i),
             toolbar::ToolbarAction::OpenFolderPicker => self.open_folder_picker(),
             toolbar::ToolbarAction::StartScan => self.start_scan(),
@@ -257,11 +305,15 @@ impl eframe::App for AnalyseApp {
         }
 
         egui::Panel::bottom("status").show(ui, |ui| {
-            status_bar::show(&self.state, &self.progress, ui)
+            status_bar::show(&self.state, &self.progress, ui);
+            if let Some(m) = &self.message {
+                ui.colored_label(egui::Color32::LIGHT_GREEN, m);
+            }
         });
         // 中央面板:Tab 状态先在局部复制渲染,结束后写回,避免借用冲突
         let mut tab = self.tab;
         let mut file_sort = self.file_sort;
+        let mut selected = self.selected.clone();
         let mut drill = std::mem::take(&mut self.drill);
         if drill.is_empty() {
             drill.push(ROOT);
@@ -279,7 +331,7 @@ impl eframe::App for AnalyseApp {
                 });
                 ui.separator();
                 match tab {
-                    Tab::TopFiles => files_panel::show(result, &mut file_sort, ui),
+                    Tab::TopFiles => files_panel::show(result, &mut file_sort, &mut selected, ui),
                     Tab::Extensions => extension_panel::show(result, ui),
                     Tab::Treemap => {
                         // 面包屑:点击任一层回退到该层
@@ -336,6 +388,51 @@ impl eframe::App for AnalyseApp {
         });
         self.tab = tab;
         self.file_sort = file_sort;
+        self.selected = selected;
         self.drill = drill;
+
+        // Delete 键触发确认对话框(仅在有勾选时)
+        if ui.input(|i| i.key_pressed(egui::Key::Delete)) && !self.selected.is_empty() {
+            self.confirm_delete = true;
+        }
+        if self.confirm_delete {
+            let n = self.selected.len();
+            let list = self.selected.clone();
+            let mut do_it = false;
+            let mut cancel = false;
+            let _ = egui::Window::new("确认删除到回收站")
+                .id(egui::Id::new("del_confirm"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui, |ui| {
+                    for p in list.iter().take(5) {
+                        ui.label(egui::RichText::new(p.display().to_string()).small());
+                    }
+                    if n > 5 {
+                        ui.label(egui::RichText::new(format!("… 共 {n} 项")).weak());
+                    }
+                    ui.separator();
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new(
+                            egui::RichText::new("删除到回收站").color(egui::Color32::LIGHT_RED),
+                        ))
+                        .clicked()
+                        {
+                            do_it = true;
+                        }
+                        if ui.button("取消").clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+            if do_it {
+                self.perform_delete();
+            }
+            if cancel {
+                self.confirm_delete = false;
+            }
+        }
     }
 }
