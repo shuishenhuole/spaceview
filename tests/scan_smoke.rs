@@ -25,7 +25,11 @@ fn scan_small_tree() {
     fs::write(root.join("a\\b\\z.log"), vec![0u8; 250]).unwrap();
     fs::write(root.join("c\\w.bin"), vec![0u8; 100]).unwrap();
 
-    let rx = spawn_scan(root.clone(), Arc::new(AtomicBool::new(false)));
+    let rx = spawn_scan(
+        root.clone(),
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    );
     let result = loop {
         match rx.recv().unwrap() {
             ScanEvent::Tick { .. } => {}

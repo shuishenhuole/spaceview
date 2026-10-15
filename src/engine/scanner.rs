@@ -129,11 +129,16 @@ fn build_partial(
     }
 }
 
-/// 启动后台扫描,返回事件接收端;cancel 置 true 后扫描在下一条目处中止
-pub fn spawn_scan(root: PathBuf, cancel: Arc<AtomicBool>) -> Receiver<ScanEvent> {
+/// 启动后台扫描,返回事件接收端;cancel 置 true 后扫描在下一条目处中止,
+/// paused 置 true 时暂停消费(jwalk 内部队列写满后自然停止推进)
+pub fn spawn_scan(
+    root: PathBuf,
+    cancel: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
+) -> Receiver<ScanEvent> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        match run(root, cancel, tx.clone()) {
+        match run(root, cancel, paused, tx.clone()) {
             Ok(()) => {}
             Err(e) => {
                 let _ = tx.send(ScanEvent::Failed(e));
@@ -143,7 +148,12 @@ pub fn spawn_scan(root: PathBuf, cancel: Arc<AtomicBool>) -> Receiver<ScanEvent>
     rx
 }
 
-fn run(root: PathBuf, cancel: Arc<AtomicBool>, tx: mpsc::Sender<ScanEvent>) -> Result<(), String> {
+fn run(
+    root: PathBuf,
+    cancel: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
+    tx: mpsc::Sender<ScanEvent>,
+) -> Result<(), String> {
     if !root.is_dir() {
         return Err(format!("路径不存在或不是目录: {}", root.display()));
     }
@@ -185,6 +195,14 @@ fn run(root: PathBuf, cancel: Arc<AtomicBool>, tx: mpsc::Sender<ScanEvent>) -> R
         if cancel.load(Ordering::Relaxed) {
             let _ = tx.send(ScanEvent::Cancelled);
             return Ok(());
+        }
+        // 暂停:挂起主循环消费,期间仍响应取消;恢复后从断点继续
+        while paused.load(Ordering::Relaxed) {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = tx.send(ScanEvent::Cancelled);
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(100));
         }
         match entry_result {
             Ok(entry) => {
