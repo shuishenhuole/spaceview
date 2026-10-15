@@ -296,6 +296,27 @@ impl AnalyseApp {
         self.message = Some((msg, std::time::Instant::now()));
     }
 
+    /// 沿 parent 链重建下钻栈,把 Treemap 定位到指定目录并切换 Tab
+    fn navigate_treemap(&mut self, idx: u32) {
+        let stack: Vec<u32> = if let AppState::Done(result) = &self.state {
+            let mut s = Vec::new();
+            let mut cur = idx;
+            loop {
+                s.push(cur);
+                match result.tree.nodes[cur as usize].parent {
+                    Some(p) => cur = p,
+                    None => break,
+                }
+            }
+            s.reverse(); // 首元素为 ROOT
+            s
+        } else {
+            return;
+        };
+        self.drill = stack;
+        self.tab = Tab::Treemap;
+    }
+
     /// 处理各面板右键菜单上报的动作
     fn handle_row_action(&mut self, action: RowAction, ctx: &egui::Context) {
         match action {
@@ -350,6 +371,15 @@ impl eframe::App for AnalyseApp {
                 ctx.request_repaint_after(std::time::Duration::from_millis(500));
             }
         }
+        // Backspace 在 Treemap 视图返回上一层(输入框获得焦点时不拦截)
+        if self.tab == Tab::Treemap
+            && matches!(self.state, AppState::Done(_))
+            && self.drill.len() > 1
+            && ctx.memory(|m| m.focused().is_none())
+            && ctx.input(|i| i.key_pressed(egui::Key::Backspace))
+        {
+            self.drill.pop();
+        }
         // 轮询文件夹对话框结果
         if let Some(rx) = &self.folder_rx {
             match rx.try_recv() {
@@ -380,13 +410,16 @@ impl eframe::App for AnalyseApp {
             needle: self.filter_text.trim().to_lowercase(),
             min_bytes: self.filter_min_bytes,
         };
-        // 扫描完成时:左侧目录树面板(右键动作经 left_action 回传)
-        let mut left_action: Option<RowAction> = None;
+        // 扫描完成时:左侧目录树面板(动作与联动导航经 left_out 回传)
+        let mut left_out = tree_panel::TreePanelOut {
+            action: None,
+            nav: None,
+        };
         if let AppState::Done(result) = &self.state {
             egui::Panel::left("tree_panel")
                 .default_size(420.0)
                 .show(ui, |ui| {
-                    left_action = tree_panel::show(ui, &result.tree, &filter);
+                    left_out = tree_panel::show(ui, &result.tree, &filter);
                 });
         }
 
@@ -523,8 +556,11 @@ impl eframe::App for AnalyseApp {
         self.selected = selected;
         self.drill = drill;
 
-        // 消费右键菜单动作(树面板与中央面板各取最后一次)
-        for a in [left_action, panel_action].into_iter().flatten() {
+        // 树面板单击导航:重建 drill 栈并切到 Treemap;随后消费右键菜单动作
+        if let Some(idx) = left_out.nav {
+            self.navigate_treemap(idx);
+        }
+        for a in [left_out.action, panel_action].into_iter().flatten() {
             self.handle_row_action(a, ui.ctx());
         }
 

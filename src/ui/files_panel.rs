@@ -67,7 +67,7 @@ pub fn show(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add_sized([100.0, 20.0], egui::Label::new("大小").selectable(false));
-                ui.label("文件(悬停看完整路径,右键更多操作)");
+                ui.label("文件(双击打开所在目录,右键更多操作)");
             });
             ui.separator();
             for (i, hit) in rows.iter().take(RENDER_LIMIT).enumerate() {
@@ -98,14 +98,20 @@ pub fn show(
                             [96.0, 18.0],
                             egui::Label::new(human_size(hit.size)).selectable(false),
                         );
-                        // 文件名标签:click 语义使右键可弹出上下文菜单
+                        // 文件名标签:click 语义支持右键菜单与双击打开所在目录
                         let path = hit.path.clone();
                         let resp = ui.add(
                             egui::Label::new(egui::RichText::new(name).strong())
                                 .sense(egui::Sense::click()),
                         );
-                        resp.on_hover_text(path.display().to_string())
-                            .context_menu(|ui| row_action = show_row_menu(&path, ui));
+                        let resp = resp.on_hover_text(format!(
+                            "{}\n双击打开所在目录,右键更多操作",
+                            path.display()
+                        ));
+                        if resp.double_clicked() {
+                            row_action = Some(RowAction::Reveal(path.clone()));
+                        }
+                        resp.context_menu(|ui| row_action = show_row_menu(&path, ui));
                     });
                 });
             }
