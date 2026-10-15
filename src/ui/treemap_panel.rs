@@ -1,16 +1,19 @@
-//! Treemap 面板:渲染当前目录的子块,点击返回下钻目标。
+//! Treemap 面板:渲染当前目录的子块,左键点击返回下钻目标,
+//! 右键弹出菜单(复制路径 / 打开文件夹 / 删除到回收站)。
 
 use crate::engine::tree::{human_size, Tree};
 use crate::engine::treemap::squarify;
+use crate::ui::files_panel::show_row_menu;
+use crate::ui::RowAction;
 
-/// 渲染 current 目录的矩形树。返回被点击的子目录节点索引(未点击为 None)。
-pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> Option<u32> {
+/// 渲染 current 目录的矩形树。返回 (被点击下钻的子目录索引, 右键菜单动作)。
+pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Option<RowAction>) {
     let rect = {
         let (r, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
         r
     };
     if !rect.is_positive() {
-        return None;
+        return (None, None);
     }
 
     // 项 = 子目录 + 本目录直属文件(灰色块)
@@ -28,7 +31,7 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> Option<u32> {
     }
     if items.is_empty() {
         ui.label(egui::RichText::new("空目录").weak());
-        return None;
+        return (None, None);
     }
 
     let laid = squarify(&items, rect);
@@ -37,6 +40,7 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> Option<u32> {
         rect.expand(1.0),
     );
     let mut clicked = None;
+    let mut row_action: Option<RowAction> = None;
 
     for (n, (marker, r)) in laid.iter().enumerate() {
         let (label, size, count_tag) = match marker {
@@ -87,23 +91,32 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> Option<u32> {
             );
         }
 
-        // 交互层:点击下钻 + 悬停详情
+        // 交互层:左键下钻 + 悬停详情 + 右键菜单
+        // 灰色"本目录文件"块没有独立节点,菜单作用于当前目录本身
+        let menu_path = match marker {
+            Some(idx) => tree.dir_path(*idx),
+            None => tree.dir_path(current),
+        };
+        let resp = ui.interact(*r, ui.id().with(("tm", n)), egui::Sense::click());
         if let Some(idx) = marker {
-            let resp = ui.interact(
-                *r,
-                ui.id().with(("tm", idx)),
-                egui::Sense::click(),
-            );
             if resp.clicked() {
                 clicked = Some(*idx);
             }
-            resp.clone().on_hover_text(format!(
-                "{label}\n{}\n{}  {}",
-                tree.dir_path(*idx).display(),
-                human_size(size),
-                count_tag
-            ));
+        }
+        let resp2 = resp.on_hover_text(format!(
+            "{label}\n{}\n{}  {}",
+            menu_path.display(),
+            human_size(size),
+            count_tag
+        ));
+        // 灰色块不提供删除(删目录会把直属文件一起删,语义留给具体目录块)
+        if marker.is_some() {
+            resp2.context_menu(|ui| {
+                if let Some(a) = show_row_menu(&menu_path, ui) {
+                    row_action = Some(a);
+                }
+            });
         }
     }
-    clicked
+    (clicked, row_action)
 }

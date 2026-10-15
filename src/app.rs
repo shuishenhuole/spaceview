@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::engine::scanner::{self, ScanEvent, ScanResult};
 use crate::engine::tree::ROOT;
 use crate::ui::{
-    extension_panel, files_panel, status_bar, toolbar, tree_panel, treemap_panel,
+    extension_panel, files_panel, status_bar, toolbar, tree_panel, treemap_panel, RowAction,
 };
 
 /// 中央面板的 Tab 页
@@ -227,6 +227,23 @@ impl AnalyseApp {
                             st.bytes = st.bytes.saturating_sub(size);
                         }
                         result.top_files.remove(pos);
+                        result.total_bytes = result.total_bytes.saturating_sub(size);
+                        result.total_files = result.total_files.saturating_sub(1);
+                    } else {
+                        // 目录删除:按路径找到节点,子树清零并从树上摘除
+                        let dir_idx = (0..result.tree.nodes.len() as u32)
+                            .find(|&i| result.tree.dir_path(i) == path);
+                        if let Some(idx) = dir_idx {
+                            let (sz, fc) = (
+                                result.tree.nodes[idx as usize].size,
+                                result.tree.nodes[idx as usize].file_count,
+                            );
+                            result.tree.remove_subtree(idx);
+                            result.total_bytes = result.total_bytes.saturating_sub(sz);
+                            result.total_files = result.total_files.saturating_sub(fc);
+                            // 被删目录下的文件若出现在 TopN,一并剔除
+                            result.top_files.retain(|h| !h.path.starts_with(&path));
+                        }
                     }
                     ok += 1;
                 }
@@ -235,9 +252,9 @@ impl AnalyseApp {
         }
         self.message = Some((
             if errs.is_empty() {
-                format!("已删除 {ok} 个文件到回收站")
+                format!("已删除 {ok} 项到回收站")
             } else {
-                format!("已删除 {ok} 个;{} 个失败:{}", errs.len(), errs[0])
+                format!("已删除 {ok} 项;{} 项失败:{}", errs.len(), errs[0])
             },
             std::time::Instant::now(),
         ));
@@ -255,6 +272,53 @@ impl AnalyseApp {
                 }
             }
         }
+    }
+
+    /// 设置状态栏反馈消息(5 秒自动消失,见 logic)
+    fn set_message(&mut self, msg: String) {
+        self.message = Some((msg, std::time::Instant::now()));
+    }
+
+    /// 处理各面板右键菜单上报的动作
+    fn handle_row_action(&mut self, action: RowAction, ctx: &egui::Context) {
+        match action {
+            RowAction::Copy(p) => {
+                ctx.copy_text(p.display().to_string());
+                self.set_message(format!("已复制路径:{}", p.display()));
+            }
+            RowAction::Reveal(p) => {
+                match reveal_in_explorer(&p) {
+                    Ok(()) => {}
+                    Err(e) => self.set_message(format!("打开资源管理器失败:{e}")),
+                }
+            }
+            RowAction::Delete(p) => {
+                // 复用现有“勾选 → 确认对话框 → perform_delete”流程
+                self.selected = vec![p];
+                self.confirm_delete = true;
+            }
+        }
+    }
+}
+
+/// 在 Windows 资源管理器中打开:path 为目录则打开自身,为文件则打开所在目录并选中
+fn reveal_in_explorer(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        let is_dir = std::fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false);
+        let mut cmd = std::process::Command::new("explorer");
+        if is_dir {
+            cmd.arg(path.as_os_str());
+        } else {
+            cmd.arg(format!("/select,{}", path.display()));
+        }
+        // explorer.exe 成功时退出码也常为 1,spawn 即视为打开,不 wait 输出
+        cmd.spawn().map(|_| ())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err(std::io::Error::other("仅 Windows 支持打开资源管理器"))
     }
 }
 
@@ -294,11 +358,14 @@ impl eframe::App for AnalyseApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // 扫描完成时:左侧目录树面板
+        // 扫描完成时:左侧目录树面板(右键动作经 left_action 回传)
+        let mut left_action: Option<RowAction> = None;
         if let AppState::Done(result) = &self.state {
             egui::Panel::left("tree_panel")
                 .default_size(420.0)
-                .show(ui, |ui| tree_panel::show(ui, &result.tree));
+                .show(ui, |ui| {
+                    left_action = tree_panel::show(ui, &result.tree);
+                });
         }
 
         // 工具栏(渲染 → 动作 → 执行)
@@ -329,6 +396,7 @@ impl eframe::App for AnalyseApp {
         if drill.is_empty() {
             drill.push(ROOT);
         }
+        let mut panel_action: Option<RowAction> = None;
         egui::CentralPanel::default().show(ui, |ui| match &self.state {
             AppState::Scanning { .. } => {
                 ui.centered_and_justified(|ui| ui.heading("正在扫描,请稍候…"));
@@ -342,7 +410,9 @@ impl eframe::App for AnalyseApp {
                 });
                 ui.separator();
                 match tab {
-                    Tab::TopFiles => files_panel::show(result, &mut file_sort, &mut selected, ui),
+                    Tab::TopFiles => {
+                        panel_action = files_panel::show(result, &mut file_sort, &mut selected, ui)
+                    }
                     Tab::Extensions => extension_panel::show(result, ui),
                     Tab::Treemap => {
                         // 面包屑:点击任一层回退到该层
@@ -382,10 +452,11 @@ impl eframe::App for AnalyseApp {
                             .weak()
                             .small(),
                         );
-                        let clicked = treemap_panel::show(ui, &result.tree, current);
+                        let (clicked, tm_action) = treemap_panel::show(ui, &result.tree, current);
                         if let Some(idx) = clicked {
                             drill.push(idx);
                         }
+                        panel_action = tm_action;
                     }
                 }
             }
@@ -401,6 +472,11 @@ impl eframe::App for AnalyseApp {
         self.file_sort = file_sort;
         self.selected = selected;
         self.drill = drill;
+
+        // 消费右键菜单动作(树面板与中央面板各取最后一次)
+        for a in [left_action, panel_action].into_iter().flatten() {
+            self.handle_row_action(a, ui.ctx());
+        }
 
         // Delete 键触发确认对话框(仅在有勾选时)
         if ui.input(|i| i.key_pressed(egui::Key::Delete)) && !self.selected.is_empty() {

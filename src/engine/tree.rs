@@ -79,6 +79,27 @@ impl Tree {
         }
     }
 
+    /// 目录被删除后同步树:整个子树大小清零、从父节点 children 摘除、沿祖先链回减
+    pub fn remove_subtree(&mut self, idx: u32) {
+        let (size, files) = {
+            let n = &self.nodes[idx as usize];
+            (n.size, n.file_count)
+        };
+        // 子树全部清零(倒序索引保证父先于子访问也无所谓,这里用栈遍历)
+        let mut stack = vec![idx];
+        while let Some(i) = stack.pop() {
+            let node = &mut self.nodes[i as usize];
+            node.size = 0;
+            node.file_count = 0;
+            stack.extend(node.children.iter().copied());
+        }
+        // 从父节点摘除,并向祖先回减
+        if let Some(p) = self.nodes[idx as usize].parent {
+            self.nodes[p as usize].children.retain(|&x| x != idx);
+            self.subtract(p, size, files);
+        }
+    }
+
     /// 直接子目录按大小降序 (idx, name, size)
     pub fn sorted_children(&self, idx: u32) -> Vec<(u32, String, u64)> {
         let mut v: Vec<(u32, String, u64)> = self.nodes[idx as usize]
