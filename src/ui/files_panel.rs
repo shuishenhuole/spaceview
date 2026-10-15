@@ -120,12 +120,18 @@ pub fn show(
                 let is_sel = selected.contains(&hit.path);
                 let is_focus = *focus_row == Some(i);
                 // 选中行用主题选中色高亮,光标行次之,其余保持斑马纹
+                // faint_bg_color 是加法混合色,直接当填充会在浅色模式发黑,改用显式灰
+                let faint = egui::Color32::from_gray(if !ui.visuals().dark_mode {
+                    238
+                } else {
+                    40
+                });
                 let fill = if is_sel {
                     ui.visuals().selection.bg_fill
                 } else if is_focus {
-                    ui.visuals().faint_bg_color
+                    faint
                 } else if i % 2 == 0 {
-                    ui.visuals().faint_bg_color
+                    faint
                 } else {
                     egui::Color32::TRANSPARENT
                 };
