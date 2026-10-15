@@ -7,7 +7,14 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
 
 use crate::engine::scanner::{self, ScanEvent, ScanResult};
-use crate::ui::{status_bar, toolbar, tree_panel};
+use crate::ui::{extension_panel, files_panel, status_bar, toolbar, tree_panel};
+
+/// 中央面板的 Tab 页
+#[derive(PartialEq, Clone, Copy)]
+pub enum Tab {
+    TopFiles,
+    Extensions,
+}
 
 /// 扫描目标来源:盘符 或 用户选择的任意文件夹
 #[derive(Clone, PartialEq)]
@@ -43,6 +50,10 @@ pub struct AnalyseApp {
     pub(crate) state: AppState,
     /// 扫描进度快照(由 Tick 事件更新,状态栏渲染用)
     pub(crate) progress: status_bar::Progress,
+    /// 中央面板当前 Tab
+    tab: Tab,
+    /// 大文件列表排序方式
+    file_sort: files_panel::SortBy,
 }
 
 impl Default for AnalyseApp {
@@ -67,6 +78,8 @@ impl Default for AnalyseApp {
                 cur: String::new(),
                 started: None,
             },
+            tab: Tab::TopFiles,
+            file_sort: files_panel::SortBy::Size,
         }
     }
 }
@@ -238,14 +251,24 @@ impl eframe::App for AnalyseApp {
         egui::Panel::bottom("status").show(ui, |ui| {
             status_bar::show(&self.state, &self.progress, ui)
         });
+        // 中央面板:Tab 状态先在局部复制渲染,结束后写回,避免借用冲突
+        let mut tab = self.tab;
+        let mut file_sort = self.file_sort;
         egui::CentralPanel::default().show(ui, |ui| match &self.state {
             AppState::Scanning { .. } => {
                 ui.centered_and_justified(|ui| ui.heading("正在扫描,请稍候…"));
             }
-            AppState::Done(_) => {
-                ui.centered_and_justified(|ui| {
-                    ui.label("扫描完成。大文件列表与 Treemap 将在后续步骤展示。")
+            AppState::Done(result) => {
+                // Tab:大文件 TopN / 扩展名统计
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut tab, Tab::TopFiles, "大文件 TopN");
+                    ui.selectable_value(&mut tab, Tab::Extensions, "按类型统计");
                 });
+                ui.separator();
+                match tab {
+                    Tab::TopFiles => files_panel::show(result, &mut file_sort, ui),
+                    Tab::Extensions => extension_panel::show(result, ui),
+                }
             }
             AppState::Failed(_) => {
                 ui.heading("磁盘空间分析工具");
@@ -255,5 +278,7 @@ impl eframe::App for AnalyseApp {
                 ui.label("选择扫描目标后点击“开始扫描”。");
             }
         });
+        self.tab = tab;
+        self.file_sort = file_sort;
     }
 }
