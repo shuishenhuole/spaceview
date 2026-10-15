@@ -80,17 +80,32 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
                 format!("{} 个文件", tree.nodes[current as usize].file_count),
             ),
         };
-        // 颜色:固定调色板轮换;直属文件块用灰色
+        // 颜色:明亮柔和的马卡龙调色板轮换;直属文件块用灰色
         const PALETTE: [[u8; 3]; 8] = [
-            [99, 143, 190], [121, 173, 121], [191, 139, 103], [163, 117, 163],
-            [103, 163, 163], [173, 143, 99], [139, 103, 173], [110, 158, 110],
+            [176, 200, 226], [182, 216, 182], [235, 197, 170], [213, 180, 213],
+            [170, 214, 214], [226, 200, 160], [190, 175, 226], [180, 214, 180],
         ];
         let fill = match marker {
             Some(_) => {
                 let c = PALETTE[n % PALETTE.len()];
                 egui::Color32::from_rgb(c[0], c[1], c[2])
             }
-            None => ui.visuals().faint_bg_color,
+            // 注意:faint_bg_color 是加法混合色(近黑),直接作不透明填充会在
+            // 浅色模式下显示为深色块,这里按主题取显式中性灰
+            None => egui::Color32::from_gray(if !ui.visuals().dark_mode {
+                215
+            } else {
+                62
+            }),
+        };
+        // 文字颜色按块底色亮度自适应:亮块用深色字、暗块用浅色字,
+        // 避免固定 strong/text 色在深/浅主题下分别出现"过浅/过深"
+        let [fr, fg, fb, _] = fill.to_normalized_gamma_f32();
+        let lum = 0.2126 * fr + 0.7152 * fg + 0.0722 * fb;
+        let text_col = if lum > 0.55 {
+            egui::Color32::from_gray(25)
+        } else {
+            egui::Color32::from_gray(240)
         };
         painter.rect_filled(*r, 1.0, fill);
         painter.rect_stroke(
@@ -111,14 +126,14 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
                     egui::Align2::CENTER_CENTER,
                     &short,
                     egui::FontId::proportional(12.0),
-                    ui.visuals().strong_text_color(),
+                    text_col,
                 );
                 painter.text(
                     r.center() + egui::vec2(0.0, 9.0),
                     egui::Align2::CENTER_CENTER,
                     &size_str,
                     egui::FontId::proportional(11.0),
-                    ui.visuals().strong_text_color(),
+                    text_col,
                 );
             } else {
                 let line = fit_width(
@@ -131,7 +146,7 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
                     egui::Align2::CENTER_CENTER,
                     line,
                     egui::FontId::proportional(12.0),
-                    ui.visuals().strong_text_color(),
+                    text_col,
                 );
             }
         }

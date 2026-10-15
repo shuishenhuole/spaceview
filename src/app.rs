@@ -36,6 +36,8 @@ pub enum AppState {
     Scanning {
         rx: Receiver<ScanEvent>,
         cancel: Arc<AtomicBool>,
+        /// 暂停标志:true 时扫描线程挂起消费,已扫描结果仍可查看
+        paused: Arc<AtomicBool>,
         /// 最近一次部分快照,有值时 UI 实时展示已扫描内容
         live: Option<Box<ScanResult>>,
     },
@@ -79,6 +81,8 @@ pub struct AnalyseApp {
     pub(crate) dark: bool,
     /// 已应用到 Context 的主题,变化时才 set_visuals,避免每帧重建
     applied_dark: Option<bool>,
+    /// 已应用到原生标题栏(DWM)的主题,变化时才下发一次
+    applied_titlebar: Option<bool>,
 }
 
 impl Default for AnalyseApp {
@@ -114,6 +118,7 @@ impl Default for AnalyseApp {
             message: None,
             dark: true,
             applied_dark: None,
+            applied_titlebar: None,
         }
     }
 }
@@ -154,14 +159,24 @@ impl AnalyseApp {
         matches!(self.state, AppState::Scanning { .. })
     }
 
+    /// 扫描是否处于暂停中
+    fn is_paused(&self) -> bool {
+        matches!(
+            &self.state,
+            AppState::Scanning { paused, .. } if paused.load(Ordering::Relaxed)
+        )
+    }
+
     /// 启动后台扫描线程
     fn start_scan(&mut self) {
         let root = self.target_path();
         let cancel = Arc::new(AtomicBool::new(false));
-        let rx = scanner::spawn_scan(root, cancel.clone());
+        let paused = Arc::new(AtomicBool::new(false));
+        let rx = scanner::spawn_scan(root, cancel.clone(), paused.clone());
         self.state = AppState::Scanning {
             rx,
             cancel,
+            paused,
             live: None,
         };
         self.progress = status_bar::Progress {
@@ -195,7 +210,13 @@ impl AnalyseApp {
     fn poll_scan_events(&mut self, ctx: &egui::Context) {
         // 取出 rx(避免借用 self.state 与 &mut self 冲突)
         let taken = std::mem::replace(&mut self.state, AppState::Idle);
-        let AppState::Scanning { rx, cancel, mut live } = taken else {
+        let AppState::Scanning {
+            rx,
+            cancel,
+            paused,
+            mut live,
+        } = taken
+        else {
             self.state = taken;
             return;
         };
@@ -239,7 +260,12 @@ impl AnalyseApp {
             }
         }
         // 仍在扫描:保持低频重绘以刷新进度
-        self.state = AppState::Scanning { rx, cancel, live };
+        self.state = AppState::Scanning {
+            rx,
+            cancel,
+            paused,
+            live,
+        };
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
 
@@ -311,6 +337,17 @@ impl AnalyseApp {
             toolbar::ToolbarAction::CancelScan => {
                 if let AppState::Scanning { cancel, .. } = &self.state {
                     cancel.store(true, Ordering::Relaxed);
+                }
+            }
+            toolbar::ToolbarAction::TogglePause => {
+                if let AppState::Scanning { paused, .. } = &self.state {
+                    let now = !paused.load(Ordering::Relaxed);
+                    paused.store(now, Ordering::Relaxed);
+                    self.set_message(if now {
+                        "已暂停扫描,可随时继续".to_string()
+                    } else {
+                        "已继续扫描".to_string()
+                    });
                 }
             }
             toolbar::ToolbarAction::ToggleTheme => self.dark = !self.dark,
@@ -461,6 +498,44 @@ impl AnalyseApp {
     }
 }
 
+/// 按窗口标题查找顶层窗口句柄(单实例,标题固定为"磁盘空间分析")
+#[cfg(windows)]
+fn find_hwnd_by_title(title: &str) -> Option<isize> {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn FindWindowW(class: *const u16, title: *const u16) -> isize;
+    }
+    let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    let hwnd = unsafe { FindWindowW(std::ptr::null(), wide.as_ptr()) };
+    if hwnd == 0 { None } else { Some(hwnd) }
+}
+
+/// 直接调用 DWM 接口设置原生标题栏深/浅色。
+/// winit 的 set_theme 只应用 SetWindowTheme/WCA_USEDARKMODECOLORS,
+/// 不会设置 DWMWA_USE_IMMERSIVE_DARK_MODE,导致标题栏不跟随主题切换。
+#[cfg(windows)]
+fn set_titlebar_dark(hwnd: isize, dark: bool) {
+    #[link(name = "dwmapi")]
+    unsafe extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: isize,
+            dwm_attribute: u32,
+            pv_attribute: *const u32,
+            cb_attribute: u32,
+        ) -> i32;
+    }
+    const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
+    let value: u32 = if dark { 1 } else { 0 };
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &value,
+            std::mem::size_of::<u32>() as u32,
+        );
+    }
+}
+
 /// 在 Windows 资源管理器中打开:path 为目录则打开自身,为文件则打开所在目录并选中
 fn reveal_in_explorer(path: &std::path::Path) -> std::io::Result<()> {
     #[cfg(windows)]
@@ -558,6 +633,14 @@ impl eframe::App for AnalyseApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // 原生标题栏主题同步:变化时下发一次 DWM 属性
+        if self.applied_titlebar != Some(self.dark) {
+            #[cfg(windows)]
+            if let Some(hwnd) = find_hwnd_by_title("磁盘空间分析") {
+                set_titlebar_dark(hwnd, self.dark);
+            }
+            self.applied_titlebar = Some(self.dark);
+        }
         // 每帧构建过滤条件,树面板与文件列表共用
         let filter = Filter {
             needle: self.filter_text.trim().to_lowercase(),
@@ -582,6 +665,7 @@ impl eframe::App for AnalyseApp {
             target: &self.target,
             target_path: self.target_path(),
             scanning: self.is_scanning(),
+            paused: self.is_paused(),
             dark: self.dark,
         };
         let action = egui::Panel::top("toolbar")
