@@ -504,6 +504,16 @@ impl eframe::App for AnalyseApp {
             } else {
                 egui::Visuals::light()
             });
+            // 同步原生窗口标题栏主题:关闭系统跟随后,winit 不再自动更新
+            // 标题栏配色,需显式下发 ViewportCommand,否则浅色模式下
+            // 顶部(系统)标题栏仍是深色,看起来像"顶部栏没有变色"
+            ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(
+                if self.dark {
+                    egui::viewport::SystemTheme::Dark
+                } else {
+                    egui::viewport::SystemTheme::Light
+                },
+            ));
             self.applied_dark = Some(self.dark);
         }
         // 反馈消息 5 秒后自动消失
