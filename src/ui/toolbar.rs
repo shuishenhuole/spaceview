@@ -12,6 +12,8 @@ pub struct ToolbarView<'a> {
     /// 当前目标解析出的实际路径(用于预览)
     pub target_path: PathBuf,
     pub scanning: bool,
+    /// 扫描是否处于暂停中(决定暂停/继续按钮文案)
+    pub paused: bool,
     /// 当前是否深色主题(决定按钮文案)
     pub dark: bool,
 }
@@ -22,6 +24,7 @@ pub enum ToolbarAction {
     OpenFolderPicker,
     StartScan,
     CancelScan,
+    TogglePause,
     ToggleTheme,
 }
 
@@ -82,6 +85,10 @@ pub fn show(view: &ToolbarView, ui: &mut egui::Ui) -> Option<ToolbarAction> {
                 .clicked()
             {
                 action = Some(ToolbarAction::CancelScan);
+            }
+            // 暂停/继续:挂起扫描线程消费,已扫描结果仍可查看
+            if ui.button(if view.paused { "继续" } else { "暂停" }).clicked() {
+                action = Some(ToolbarAction::TogglePause);
             }
             ui.spinner();
         } else if ui.add(egui::Button::new("开始扫描")).clicked() {

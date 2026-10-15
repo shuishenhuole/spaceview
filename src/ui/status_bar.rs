@@ -17,10 +17,15 @@ pub fn show(state: &AppState, progress: &Progress, ui: &mut egui::Ui) {
         AppState::Idle => {
             ui.label("就绪:选择盘符或文件夹后点击“开始扫描”。");
         }
-        AppState::Scanning { .. } => {
+        AppState::Scanning { paused, .. } => {
             let elapsed = progress.started.map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.0);
             ui.horizontal(|ui| {
-                ui.spinner();
+                if paused.load(std::sync::atomic::Ordering::Relaxed) {
+                    // 暂停中不转圈,提示可继续
+                    ui.label("⏸ 已暂停");
+                } else {
+                    ui.spinner();
+                }
                 // 附扫描速度,观感上替代无法预知的总进度
                 let secs = elapsed.max(0.5) as f64;
                 ui.label(format!(
