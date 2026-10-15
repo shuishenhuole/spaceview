@@ -1,7 +1,7 @@
 //! 底部状态栏:扫描进度、完成摘要或失败信息。
 
 use crate::app::AppState;
-use crate::engine::tree::{human_size, ROOT};
+use crate::engine::tree::human_size;
 
 /// 进度快照(app.rs 在 Tick 事件中更新)
 pub struct Progress {
@@ -39,7 +39,7 @@ pub fn show(state: &AppState, progress: &Progress, ui: &mut egui::Ui) {
             ui.label(format!(
                 "扫描完成:{} 个文件,合计 {}。受限目录 {} 项(已跳过)。",
                 result.total_files,
-                human_size(result.tree.nodes[ROOT as usize].size),
+                human_size(result.total_bytes),
                 result.denied.len(),
             ));
         }

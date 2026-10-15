@@ -98,7 +98,8 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> Option<u32> {
                 clicked = Some(*idx);
             }
             resp.clone().on_hover_text(format!(
-                "{label}\n{}  {}",
+                "{label}\n{}\n{}  {}",
+                tree.dir_path(*idx).display(),
                 human_size(size),
                 count_tag
             ));

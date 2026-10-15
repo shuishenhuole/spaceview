@@ -1,7 +1,7 @@
 //! Squarified Treemap 布局算法(纯计算,无 UI 依赖)。
 //! 参考 Bruls, Huizing, van Wijk "Squarified Treemaps"。
 
-use egui::{Pos2, Rect, Vec2};
+use egui::{Rect, Vec2};
 
 /// 对 items(节点标识 + 权重)在 rect 内做 squarified 布局,返回各自的矩形。
 /// 权重 <= 0 的项被丢弃;若总权重为 0 返回空。
@@ -99,6 +99,7 @@ fn worst_ratio(items: &[(impl Clone, u64)], s2: f64, row_sum: u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::Pos2;
 
     #[test]
     fn covers_area_and_keeps_ratios() {
