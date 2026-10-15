@@ -36,6 +36,8 @@ pub enum AppState {
     Scanning {
         rx: Receiver<ScanEvent>,
         cancel: Arc<AtomicBool>,
+        /// 最近一次部分快照,有值时 UI 实时展示已扫描内容
+        live: Option<Box<ScanResult>>,
     },
     /// 扫描完成,结果可用
     Done(Box<ScanResult>),
@@ -157,7 +159,11 @@ impl AnalyseApp {
         let root = self.target_path();
         let cancel = Arc::new(AtomicBool::new(false));
         let rx = scanner::spawn_scan(root, cancel.clone());
-        self.state = AppState::Scanning { rx, cancel };
+        self.state = AppState::Scanning {
+            rx,
+            cancel,
+            live: None,
+        };
         self.progress = status_bar::Progress {
             dirs: 0,
             files: 0,
@@ -165,6 +171,11 @@ impl AnalyseApp {
             cur: String::new(),
             started: Some(std::time::Instant::now()),
         };
+        // 新扫描从根视图重新开始,清空旧的下钻/勾选状态
+        self.drill = vec![ROOT];
+        self.selected.clear();
+        self.focus_row = None;
+        self.confirm_delete = false;
     }
 
     /// 在工作线程打开系统文件夹选择对话框,避免阻塞 UI 重绘
@@ -180,11 +191,11 @@ impl AnalyseApp {
         self.folder_rx = Some(rx);
     }
 
-    /// 消费扫描线程事件:更新进度 / 完成 / 取消 / 失败
+    /// 消费扫描线程事件:更新进度 / 实时快照 / 完成 / 取消 / 失败
     fn poll_scan_events(&mut self, ctx: &egui::Context) {
         // 取出 rx(避免借用 self.state 与 &mut self 冲突)
         let taken = std::mem::replace(&mut self.state, AppState::Idle);
-        let AppState::Scanning { rx, cancel } = taken else {
+        let AppState::Scanning { rx, cancel, mut live } = taken else {
             self.state = taken;
             return;
         };
@@ -201,10 +212,14 @@ impl AnalyseApp {
                     self.progress.bytes = bytes;
                     self.progress.cur = cur;
                 }
+                Ok(ScanEvent::Snapshot(result)) => {
+                    // 缓存最新快照,UI 在扫描过程中即可展示已扫描内容
+                    live = Some(result);
+                }
                 Ok(ScanEvent::Done(result)) => {
+                    // 保留扫描期间的下钻/勾选状态(节点索引在快照与终值间稳定)
                     self.state = AppState::Done(result);
-                    self.drill = vec![ROOT]; // 新结果重置下钻路径
-                    self.focus_row = None;
+                    self.selected.clear();
                     return;
                 }
                 Ok(ScanEvent::Cancelled) => {
@@ -224,7 +239,7 @@ impl AnalyseApp {
             }
         }
         // 仍在扫描:保持低频重绘以刷新进度
-        self.state = AppState::Scanning { rx, cancel };
+        self.state = AppState::Scanning { rx, cancel, live };
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
 
@@ -307,9 +322,20 @@ impl AnalyseApp {
         self.message = Some((msg, std::time::Instant::now()));
     }
 
+    /// 当前可展示的结果:扫描完成后的终值,或扫描中的最新快照(实时视图)
+    fn view_ref(&self) -> Option<&ScanResult> {
+        match &self.state {
+            AppState::Done(result) => Some(result),
+            AppState::Scanning {
+                live: Some(result), ..
+            } => Some(result),
+            _ => None,
+        }
+    }
+
     /// 沿 parent 链重建下钻栈,把 Treemap 定位到指定目录并切换 Tab
     fn navigate_treemap(&mut self, idx: u32) {
-        let stack: Vec<u32> = if let AppState::Done(result) = &self.state {
+        let stack: Vec<u32> = if let Some(result) = self.view_ref() {
             let mut s = Vec::new();
             let mut cur = idx;
             loop {
@@ -342,9 +368,94 @@ impl AnalyseApp {
                 }
             }
             RowAction::Delete(p) => {
-                // 复用现有“勾选 → 确认对话框 → perform_delete”流程
-                self.selected = vec![p];
-                self.confirm_delete = true;
+                // 复用现有“勾选 → 确认对话框 → perform_delete”流程;扫描中禁止删除
+                if self.is_scanning() {
+                    self.set_message("扫描进行中,请等待完成后再删除".to_string());
+                } else {
+                    self.selected = vec![p];
+                    self.confirm_delete = true;
+                }
+            }
+        }
+    }
+
+    /// 渲染中央面板的三 Tab 内容(终值或扫描快照共用);
+    /// 可变 UI 状态全部经局部引用传入,渲染期间不借用 self.state
+    #[allow(clippy::too_many_arguments)]
+    fn render_result(
+        &self,
+        result: &ScanResult,
+        scanning: bool,
+        filter: &Filter,
+        tab: &mut Tab,
+        file_sort: &mut files_panel::SortBy,
+        selected: &mut Vec<PathBuf>,
+        focus_row: &mut Option<usize>,
+        drill: &mut Vec<u32>,
+        ui: &mut egui::Ui,
+    ) -> Option<RowAction> {
+        if scanning {
+            ui.label(
+                egui::RichText::new("正在扫描 — 以下为已扫描部分的实时结果,完成后自动刷新")
+                    .weak()
+                    .italics(),
+            );
+        }
+        // Tab:大文件 TopN / 扩展名统计 / Treemap
+        ui.horizontal(|ui| {
+            ui.selectable_value(tab, Tab::TopFiles, "大文件 TopN");
+            ui.selectable_value(tab, Tab::Extensions, "按类型统计");
+            ui.selectable_value(tab, Tab::Treemap, "Treemap");
+        });
+        ui.separator();
+        match *tab {
+            Tab::TopFiles => {
+                files_panel::show(result, file_sort, selected, focus_row, filter, ui)
+            }
+            Tab::Extensions => {
+                extension_panel::show(result, ui);
+                None
+            }
+            Tab::Treemap => {
+                // 面包屑:点击任一层回退到该层
+                let mut crumb_pop: Option<usize> = None;
+                egui::ScrollArea::horizontal().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for (lvl, &idx) in drill.iter().enumerate() {
+                            let name = if idx == ROOT {
+                                result.tree.root_path.to_string_lossy().into_owned()
+                            } else {
+                                result.tree.nodes[idx as usize].name.clone()
+                            };
+                            let last = lvl + 1 == drill.len();
+                            if ui.add_enabled(!last, egui::Button::new(name)).clicked() {
+                                crumb_pop = Some(lvl);
+                            }
+                            if !last {
+                                ui.label("›");
+                            }
+                        }
+                    });
+                });
+                if let Some(lvl) = crumb_pop {
+                    drill.truncate(lvl + 1);
+                }
+                let current = *drill.last().unwrap();
+                let node = &result.tree.nodes[current as usize];
+                ui.label(
+                    egui::RichText::new(format!(
+                        "当前视图:{} — {}",
+                        node.name,
+                        crate::engine::tree::human_size(node.size)
+                    ))
+                    .weak()
+                    .small(),
+                );
+                let (clicked, tm_action) = treemap_panel::show(ui, &result.tree, current);
+                if let Some(idx) = clicked {
+                    drill.push(idx);
+                }
+                tm_action
             }
         }
     }
@@ -393,7 +504,7 @@ impl eframe::App for AnalyseApp {
         }
         // Backspace 在 Treemap 视图返回上一层(输入框获得焦点时不拦截)
         if self.tab == Tab::Treemap
-            && matches!(self.state, AppState::Done(_))
+            && self.view_ref().is_some()
             && self.drill.len() > 1
             && ctx.memory(|m| m.focused().is_none())
             && ctx.input(|i| i.key_pressed(egui::Key::Backspace))
@@ -430,12 +541,12 @@ impl eframe::App for AnalyseApp {
             needle: self.filter_text.trim().to_lowercase(),
             min_bytes: self.filter_min_bytes,
         };
-        // 扫描完成时:左侧目录树面板(动作与联动导航经 left_out 回传)
+        // 有可展示结果(终值或扫描快照)时:左侧目录树面板(动作与联动导航经 left_out 回传)
         let mut left_out = tree_panel::TreePanelOut {
             action: None,
             nav: None,
         };
-        if let AppState::Done(result) = &self.state {
+        if let Some(result) = self.view_ref() {
             egui::Panel::left("tree_panel")
                 .default_size(420.0)
                 .show(ui, |ui| {
@@ -458,8 +569,8 @@ impl eframe::App for AnalyseApp {
             self.handle_toolbar_action(a);
         }
 
-        // 过滤栏:仅在有扫描结果时显示(搜索框 + 大小阈值下拉)
-        if matches!(self.state, AppState::Done(_)) {
+        // 过滤栏:仅在有可展示结果时显示(搜索框 + 大小阈值下拉)
+        if self.view_ref().is_some() {
             egui::Panel::top("filter_bar").show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("过滤:");
@@ -498,82 +609,27 @@ impl eframe::App for AnalyseApp {
             drill.push(ROOT);
         }
         let mut panel_action: Option<RowAction> = None;
-        egui::CentralPanel::default().show(ui, |ui| match &self.state {
-            AppState::Scanning { .. } => {
+        let scanning = self.is_scanning();
+        egui::CentralPanel::default().show(ui, |ui| {
+            if let Some(result) = self.view_ref() {
+                panel_action = self.render_result(
+                    result,
+                    scanning,
+                    &filter,
+                    &mut tab,
+                    &mut file_sort,
+                    &mut selected,
+                    &mut focus_row,
+                    &mut drill,
+                    ui,
+                );
+            } else if scanning {
                 ui.centered_and_justified(|ui| ui.heading("正在扫描,请稍候…"));
-            }
-            AppState::Done(result) => {
-                // Tab:大文件 TopN / 扩展名统计 / Treemap
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut tab, Tab::TopFiles, "大文件 TopN");
-                    ui.selectable_value(&mut tab, Tab::Extensions, "按类型统计");
-                    ui.selectable_value(&mut tab, Tab::Treemap, "Treemap");
-                });
-                ui.separator();
-                match tab {
-                    Tab::TopFiles => {
-                        panel_action = files_panel::show(
-                            result,
-                            &mut file_sort,
-                            &mut selected,
-                            &mut focus_row,
-                            &filter,
-                            ui,
-                        )
-                    }
-                    Tab::Extensions => extension_panel::show(result, ui),
-                    Tab::Treemap => {
-                        // 面包屑:点击任一层回退到该层
-                        let mut crumb_pop: Option<usize> = None;
-                        egui::ScrollArea::horizontal().show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                for (lvl, &idx) in drill.iter().enumerate() {
-                                    let name = if idx == ROOT {
-                                        result.tree.root_path.to_string_lossy().into_owned()
-                                    } else {
-                                        result.tree.nodes[idx as usize].name.clone()
-                                    };
-                                    let last = lvl + 1 == drill.len();
-                                    if ui
-                                        .add_enabled(!last, egui::Button::new(name))
-                                        .clicked()
-                                    {
-                                        crumb_pop = Some(lvl);
-                                    }
-                                    if !last {
-                                        ui.label("›");
-                                    }
-                                }
-                            });
-                        });
-                        if let Some(lvl) = crumb_pop {
-                            drill.truncate(lvl + 1);
-                        }
-                        let current = *drill.last().unwrap();
-                        let node = &result.tree.nodes[current as usize];
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "当前视图:{} — {}",
-                                node.name,
-                                crate::engine::tree::human_size(node.size)
-                            ))
-                            .weak()
-                            .small(),
-                        );
-                        let (clicked, tm_action) = treemap_panel::show(ui, &result.tree, current);
-                        if let Some(idx) = clicked {
-                            drill.push(idx);
-                        }
-                        panel_action = tm_action;
-                    }
+            } else {
+                ui.heading("磁盘空间分析工具");
+                if !matches!(self.state, AppState::Failed(_)) {
+                    ui.label("选择扫描目标后点击“开始扫描”。");
                 }
-            }
-            AppState::Failed(_) => {
-                ui.heading("磁盘空间分析工具");
-            }
-            _ => {
-                ui.heading("磁盘空间分析工具");
-                ui.label("选择扫描目标后点击“开始扫描”。");
             }
         });
         self.tab = tab;
@@ -615,8 +671,11 @@ impl eframe::App for AnalyseApp {
                 });
         }
 
-        // Delete 键触发确认对话框(仅在有勾选时)
-        if ui.input(|i| i.key_pressed(egui::Key::Delete)) && !self.selected.is_empty() {
+        // Delete 键触发确认对话框(仅在有勾选且扫描结束时)
+        if ui.input(|i| i.key_pressed(egui::Key::Delete))
+            && !self.selected.is_empty()
+            && !self.is_scanning()
+        {
             self.confirm_delete = true;
         }
         if self.confirm_delete {
