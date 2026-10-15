@@ -64,8 +64,8 @@ pub struct AnalyseApp {
     selected: Vec<PathBuf>,
     /// 是否弹出删除确认框
     confirm_delete: bool,
-    /// 最近一次操作反馈(如删除结果),显示在状态栏
-    pub(crate) message: Option<String>,
+    /// 最近一次操作反馈(如删除结果),显示在状态栏,约 5 秒后自动消失
+    pub(crate) message: Option<(String, std::time::Instant)>,
 }
 
 impl Default for AnalyseApp {
@@ -233,11 +233,14 @@ impl AnalyseApp {
                 Err(e) => errs.push(format!("{} — {e}", path.display())),
             }
         }
-        self.message = Some(if errs.is_empty() {
-            format!("已删除 {ok} 个文件到回收站")
-        } else {
-            format!("已删除 {ok} 个;{} 个失败:{}", errs.len(), errs[0])
-        });
+        self.message = Some((
+            if errs.is_empty() {
+                format!("已删除 {ok} 个文件到回收站")
+            } else {
+                format!("已删除 {ok} 个;{} 个失败:{}", errs.len(), errs[0])
+            },
+            std::time::Instant::now(),
+        ));
         self.confirm_delete = false;
     }
 
@@ -258,6 +261,14 @@ impl AnalyseApp {
 impl eframe::App for AnalyseApp {
     /// 每帧先 logic(改状态、收线程事件,不画 UI),再 ui(构建界面)
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 反馈消息 5 秒后自动消失
+        if let Some((_, at)) = &self.message {
+            if at.elapsed() > std::time::Duration::from_secs(5) {
+                self.message = None;
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            }
+        }
         // 轮询文件夹对话框结果
         if let Some(rx) = &self.folder_rx {
             match rx.try_recv() {
@@ -306,7 +317,7 @@ impl eframe::App for AnalyseApp {
 
         egui::Panel::bottom("status").show(ui, |ui| {
             status_bar::show(&self.state, &self.progress, ui);
-            if let Some(m) = &self.message {
+            if let Some((m, _)) = &self.message {
                 ui.colored_label(egui::Color32::LIGHT_GREEN, m);
             }
         });
