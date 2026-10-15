@@ -5,3 +5,4 @@ pub mod files_panel;
 pub mod status_bar;
 pub mod toolbar;
 pub mod tree_panel;
+pub mod treemap_panel;

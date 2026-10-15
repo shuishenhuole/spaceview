@@ -7,13 +7,17 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
 
 use crate::engine::scanner::{self, ScanEvent, ScanResult};
-use crate::ui::{extension_panel, files_panel, status_bar, toolbar, tree_panel};
+use crate::engine::tree::ROOT;
+use crate::ui::{
+    extension_panel, files_panel, status_bar, toolbar, tree_panel, treemap_panel,
+};
 
 /// 中央面板的 Tab 页
 #[derive(PartialEq, Clone, Copy)]
 pub enum Tab {
     TopFiles,
     Extensions,
+    Treemap,
 }
 
 /// 扫描目标来源:盘符 或 用户选择的任意文件夹
@@ -54,6 +58,8 @@ pub struct AnalyseApp {
     tab: Tab,
     /// 大文件列表排序方式
     file_sort: files_panel::SortBy,
+    /// Treemap 下钻路径(节点索引栈,首元素为 ROOT)
+    drill: Vec<u32>,
 }
 
 impl Default for AnalyseApp {
@@ -80,6 +86,7 @@ impl Default for AnalyseApp {
             },
             tab: Tab::TopFiles,
             file_sort: files_panel::SortBy::Size,
+            drill: vec![ROOT],
         }
     }
 }
@@ -161,6 +168,7 @@ impl AnalyseApp {
                 }
                 Ok(ScanEvent::Done(result)) => {
                     self.state = AppState::Done(result);
+                    self.drill = vec![ROOT]; // 新结果重置下钻路径
                     return;
                 }
                 Ok(ScanEvent::Cancelled) => {
@@ -254,20 +262,68 @@ impl eframe::App for AnalyseApp {
         // 中央面板:Tab 状态先在局部复制渲染,结束后写回,避免借用冲突
         let mut tab = self.tab;
         let mut file_sort = self.file_sort;
+        let mut drill = std::mem::take(&mut self.drill);
+        if drill.is_empty() {
+            drill.push(ROOT);
+        }
         egui::CentralPanel::default().show(ui, |ui| match &self.state {
             AppState::Scanning { .. } => {
                 ui.centered_and_justified(|ui| ui.heading("正在扫描,请稍候…"));
             }
             AppState::Done(result) => {
-                // Tab:大文件 TopN / 扩展名统计
+                // Tab:大文件 TopN / 扩展名统计 / Treemap
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut tab, Tab::TopFiles, "大文件 TopN");
                     ui.selectable_value(&mut tab, Tab::Extensions, "按类型统计");
+                    ui.selectable_value(&mut tab, Tab::Treemap, "Treemap");
                 });
                 ui.separator();
                 match tab {
                     Tab::TopFiles => files_panel::show(result, &mut file_sort, ui),
                     Tab::Extensions => extension_panel::show(result, ui),
+                    Tab::Treemap => {
+                        // 面包屑:点击任一层回退到该层
+                        let mut crumb_pop: Option<usize> = None;
+                        egui::ScrollArea::horizontal().show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                for (lvl, &idx) in drill.iter().enumerate() {
+                                    let name = if idx == ROOT {
+                                        result.tree.root_path.to_string_lossy().into_owned()
+                                    } else {
+                                        result.tree.nodes[idx as usize].name.clone()
+                                    };
+                                    let last = lvl + 1 == drill.len();
+                                    if ui
+                                        .add_enabled(!last, egui::Button::new(name))
+                                        .clicked()
+                                    {
+                                        crumb_pop = Some(lvl);
+                                    }
+                                    if !last {
+                                        ui.label("›");
+                                    }
+                                }
+                            });
+                        });
+                        if let Some(lvl) = crumb_pop {
+                            drill.truncate(lvl + 1);
+                        }
+                        let current = *drill.last().unwrap();
+                        let node = &result.tree.nodes[current as usize];
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "当前视图:{} — {}",
+                                node.name,
+                                crate::engine::tree::human_size(node.size)
+                            ))
+                            .weak()
+                            .small(),
+                        );
+                        let clicked = treemap_panel::show(ui, &result.tree, current);
+                        if let Some(idx) = clicked {
+                            drill.push(idx);
+                        }
+                    }
                 }
             }
             AppState::Failed(_) => {
@@ -280,5 +336,6 @@ impl eframe::App for AnalyseApp {
         });
         self.tab = tab;
         self.file_sort = file_sort;
+        self.drill = drill;
     }
 }
