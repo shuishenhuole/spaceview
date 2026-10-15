@@ -6,6 +6,26 @@ use crate::engine::treemap::squarify;
 use crate::ui::files_panel::show_row_menu;
 use crate::ui::RowAction;
 
+/// 按像素宽度估算截断文本:中文≈1em、ASCII≈0.55em,超出时以省略号结尾
+fn fit_width(s: &str, max_px: f32, font_px: f32) -> String {
+    let mut w = 0.0f32;
+    let mut out = String::new();
+    for ch in s.chars() {
+        let cw = if ch.is_ascii() {
+            font_px * 0.55
+        } else {
+            font_px * 1.05
+        };
+        if w + cw > max_px {
+            out.push('…');
+            break;
+        }
+        w += cw;
+        out.push(ch);
+    }
+    out
+}
+
 /// 渲染 current 目录的矩形树。返回 (被点击下钻的子目录索引, 右键菜单动作)。
 pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Option<RowAction>) {
     let rect = {
@@ -80,13 +100,12 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
             egui::StrokeKind::Inside,
         );
 
-        // 文字:仅在矩形够大时绘制,宽度不足手动截断;
-        // 高度充足时名字与占用大小分两行,空间不够则合并为一行
+        // 文字:仅在矩形够大时绘制;高度充足时名字与占用大小分两行,空间不够则合并为一行
+        // 截断按像素宽度估算(中文≈1em、ASCII≈0.55em),避免中文名溢出
         if r.width() > 70.0 && r.height() > 18.0 {
-            let max_chars = (r.width() / 7.5).clamp(3.0, 60.0) as usize;
-            let short: String = label.chars().take(max_chars).collect();
             let size_str = human_size(size);
             if r.height() > 36.0 {
+                let short = fit_width(&label, r.width() - 8.0, 12.0);
                 painter.text(
                     r.center() - egui::vec2(0.0, 8.0),
                     egui::Align2::CENTER_CENTER,
@@ -99,13 +118,18 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
                     egui::Align2::CENTER_CENTER,
                     &size_str,
                     egui::FontId::proportional(11.0),
-                    ui.visuals().text_color(),
+                    ui.visuals().strong_text_color(),
                 );
             } else {
+                let line = fit_width(
+                    &format!("{label} · {size_str}"),
+                    r.width() - 8.0,
+                    12.0,
+                );
                 painter.text(
                     r.center(),
                     egui::Align2::CENTER_CENTER,
-                    format!("{short} · {size_str}"),
+                    line,
                     egui::FontId::proportional(12.0),
                     ui.visuals().strong_text_color(),
                 );
