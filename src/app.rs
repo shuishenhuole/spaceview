@@ -69,6 +69,8 @@ pub struct AnalyseApp {
     filter_text: String,
     /// 大小阈值,仅显示不小于该值的条目;0=不限
     filter_min_bytes: u64,
+    /// 大文件列表键盘光标所在行(↑↓ 移动,空格勾选)
+    focus_row: Option<usize>,
     /// 最近一次操作反馈(如删除结果),显示在状态栏,约 5 秒后自动消失
     pub(crate) message: Option<(String, std::time::Instant)>,
     /// 深色主题开关(工具栏按钮切换,持久化到 eframe Storage)
@@ -106,6 +108,7 @@ impl Default for AnalyseApp {
             confirm_delete: false,
             filter_text: String::new(),
             filter_min_bytes: 0,
+            focus_row: None,
             message: None,
             dark: true,
             applied_dark: None,
@@ -201,6 +204,7 @@ impl AnalyseApp {
                 Ok(ScanEvent::Done(result)) => {
                     self.state = AppState::Done(result);
                     self.drill = vec![ROOT]; // 新结果重置下钻路径
+                    self.focus_row = None;
                     return;
                 }
                 Ok(ScanEvent::Cancelled) => {
@@ -491,6 +495,7 @@ impl eframe::App for AnalyseApp {
         let mut tab = self.tab;
         let mut file_sort = self.file_sort;
         let mut selected = self.selected.clone();
+        let mut focus_row = self.focus_row;
         let mut drill = std::mem::take(&mut self.drill);
         if drill.is_empty() {
             drill.push(ROOT);
@@ -510,8 +515,14 @@ impl eframe::App for AnalyseApp {
                 ui.separator();
                 match tab {
                     Tab::TopFiles => {
-                        panel_action =
-                            files_panel::show(result, &mut file_sort, &mut selected, &filter, ui)
+                        panel_action = files_panel::show(
+                            result,
+                            &mut file_sort,
+                            &mut selected,
+                            &mut focus_row,
+                            &filter,
+                            ui,
+                        )
                     }
                     Tab::Extensions => extension_panel::show(result, ui),
                     Tab::Treemap => {
@@ -571,6 +582,7 @@ impl eframe::App for AnalyseApp {
         self.tab = tab;
         self.file_sort = file_sort;
         self.selected = selected;
+        self.focus_row = focus_row;
         self.drill = drill;
 
         // 树面板单击导航:重建 drill 栈并切到 Treemap;随后消费右键菜单动作
