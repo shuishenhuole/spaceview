@@ -65,3 +65,12 @@ fn scan_small_tree() {
 
     fs::remove_dir_all(&root).unwrap();
 }
+
+/// 验证 trash 在本机能正常删除到回收站
+#[test]
+fn trash_delete_moves_to_recycle_bin() {
+    let f = std::env::temp_dir().join(format!("analyse_trash_test_{}.txt", std::process::id()));
+    fs::write(&f, b"qoder test file, safe to delete").unwrap();
+    trash::delete(&f).expect("回收站删除失败");
+    assert!(!f.exists());
+}

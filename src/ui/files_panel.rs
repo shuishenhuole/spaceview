@@ -1,5 +1,7 @@
 //! 大文件 TopN 面板:可按大小/路径排序的列表(仅渲染前 1000 行防卡顿)。
 
+use std::path::PathBuf;
+
 use crate::engine::scanner::{FileHit, ScanResult};
 use crate::engine::tree::human_size;
 
@@ -12,14 +14,22 @@ pub enum SortBy {
 
 const RENDER_LIMIT: usize = 1000;
 
-pub fn show(result: &ScanResult, sort_by: &mut SortBy, ui: &mut egui::Ui) {
+pub fn show(
+    result: &ScanResult,
+    sort_by: &mut SortBy,
+    selected: &mut Vec<PathBuf>,
+    ui: &mut egui::Ui,
+) {
     ui.horizontal(|ui| {
         ui.label("排序:");
         ui.selectable_value(sort_by, SortBy::Size, "按大小");
         ui.selectable_value(sort_by, SortBy::Name, "按路径");
+        if !selected.is_empty() {
+            ui.label(egui::RichText::new(format!("已选 {} 项", selected.len())).color(egui::Color32::LIGHT_YELLOW));
+        }
         ui.label(
             egui::RichText::new(format!(
-                "(共 {} 条,渲染前 {} 条)",
+                "(共 {} 条,渲染前 {} 条;勾选后可按 Delete 删除)",
                 result.top_files.len(),
                 RENDER_LIMIT
             ))
@@ -62,6 +72,15 @@ pub fn show(result: &ScanResult, sort_by: &mut SortBy, ui: &mut egui::Ui) {
                     .inner_margin(egui::Margin::symmetric(4, 1));
                 frame.show(ui, |ui| {
                     ui.horizontal(|ui| {
+                        // 勾选框:选中集以路径为键
+                        let mut sel = selected.contains(&hit.path);
+                        if ui.checkbox(&mut sel, "").changed() {
+                            if sel {
+                                selected.push(hit.path.clone());
+                            } else {
+                                selected.retain(|p| p != &hit.path);
+                            }
+                        }
                         ui.add_sized(
                             [96.0, 18.0],
                             egui::Label::new(human_size(hit.size)).selectable(false),
