@@ -85,4 +85,4 @@ cargo test
 
 ## 许可
 
-个人学习与内部使用。
+[MIT](LICENSE) © 2026 shuishenhuole
