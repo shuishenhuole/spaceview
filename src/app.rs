@@ -459,7 +459,10 @@ impl AnalyseApp {
                             .to_string(),
                     );
                 } else {
-                    self.selected = vec![p];
+                    // 若右键行已在多选集合中,则删除整组;否则仅删除该行
+                    if !(self.selected.len() > 1 && self.selected.contains(&p)) {
+                        self.selected = vec![p];
+                    }
                     self.confirm_delete = true;
                 }
             }
