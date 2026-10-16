@@ -3,6 +3,8 @@
 
 use crate::engine::tree::{human_size, Tree};
 use crate::engine::treemap::squarify;
+use crate::f;
+use crate::i18n::b;
 use crate::ui::files_panel::show_row_menu;
 use crate::ui::RowAction;
 
@@ -82,7 +84,10 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
         items.push((None, own_files));
     }
     if items.is_empty() {
-        ui.label(egui::RichText::new("空目录").weak());
+        ui.label(
+            egui::RichText::new(b("空目录", "Empty folder"))
+                .weak(),
+        );
         return (None, None);
     }
 
@@ -144,13 +149,17 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
                 (
                     node.name.clone(),
                     node.size,
-                    format!("{} 个文件", node.file_count),
+                    f!("{} 个文件", "{} files", node.file_count),
                 )
             }
             None => (
-                "本目录文件".to_owned(),
+                b("本目录文件", "Files in this folder").to_owned(),
                 own_files,
-                format!("{} 个文件", tree.nodes[current as usize].file_count),
+                f!(
+                    "{} 个文件",
+                    "{} files",
+                    tree.nodes[current as usize].file_count
+                ),
             ),
         };
         // 颜色:明亮柔和的马卡龙调色板轮换;直属文件块用灰色
@@ -238,8 +247,9 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
             }
         }
         let pct = size as f32 / cur_size.max(1) as f32 * 100.0;
-        let resp2 = resp.on_hover_text(format!(
+        let resp2 = resp.on_hover_text(f!(
             "{label}\n{}\n{}  {} · 占当前视图 {:.1}%",
+            "{label}\n{}\n{}  {} · {:.1}% of current view",
             menu_path.display(),
             human_size(size),
             count_tag,

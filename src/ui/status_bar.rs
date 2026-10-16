@@ -2,6 +2,8 @@
 
 use crate::app::AppState;
 use crate::engine::tree::human_size;
+use crate::f;
+use crate::i18n::b;
 
 /// 进度快照(app.rs 在 Tick 事件中更新)
 pub struct Progress {
@@ -29,7 +31,10 @@ fn active_elapsed(progress: &Progress) -> f32 {
 pub fn show(state: &AppState, progress: &Progress, ui: &mut egui::Ui) {
     match state {
         AppState::Idle => {
-            ui.label("就绪:选择盘符或文件夹后点击“开始扫描”。");
+            ui.label(b(
+                "就绪:选择盘符或文件夹后点击“开始扫描”。",
+                "Ready: pick a drive or folder, then click \u{201c}Start Scan\u{201d}.",
+            ));
         }
         AppState::Scanning { paused, .. } => {
             // 有效耗时扣除暂停区间,暂停中数字保持不动
@@ -37,14 +42,15 @@ pub fn show(state: &AppState, progress: &Progress, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 if paused.load(std::sync::atomic::Ordering::Relaxed) {
                     // 暂停中不转圈,提示可继续
-                    ui.label("⏸ 已暂停");
+                    ui.label(b("⏸ 已暂停", "⏸ Paused"));
                 } else {
                     ui.spinner();
                 }
                 // 附扫描速度,观感上替代无法预知的总进度
                 let secs = elapsed.max(0.5) as f64;
-                ui.label(format!(
+                ui.label(f!(
                     "已扫描 {} 个目录 / {} 个文件,共 {} — {:.1}s · {:.0} 文件/秒 · {:.1} MB/秒",
+                    "Scanned {} dirs / {} files, {} total — {:.1}s · {:.0} files/s · {:.1} MB/s",
                     progress.dirs,
                     progress.files,
                     human_size(progress.bytes),
@@ -54,21 +60,29 @@ pub fn show(state: &AppState, progress: &Progress, ui: &mut egui::Ui) {
                 ));
             });
             ui.label(
-                egui::RichText::new(format!("当前: {}", progress.cur))
-                    .small()
-                    .color(ui.visuals().weak_text_color()),
+                egui::RichText::new(f!(
+                    "当前: {}",
+                    "Current: {}",
+                    progress.cur
+                ))
+                .small()
+                .color(ui.visuals().weak_text_color()),
             );
         }
         AppState::Done(result) => {
-            ui.label(format!(
+            ui.label(f!(
                 "扫描完成:{} 个文件,合计 {}。受限目录 {} 项(已跳过)。",
+                "Scan finished: {} files, {} total. {} restricted directories skipped.",
                 result.total_files,
                 human_size(result.total_bytes),
                 result.denied.len(),
             ));
         }
         AppState::Failed(err) => {
-            ui.colored_label(egui::Color32::LIGHT_RED, format!("扫描失败:{err}"));
+            ui.colored_label(
+                egui::Color32::LIGHT_RED,
+                f!("扫描失败:{}", "Scan failed: {}", err),
+            );
         }
     }
 }

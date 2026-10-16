@@ -1,5 +1,9 @@
 //! 扫描引擎冒烟测试:构造小目录树,验证大小聚合与 TopN。
 
+// scanner.rs 依赖 crate 根的 i18n(文案选取与 f! 宏),测试独立编译时一并引入
+#[path = "../src/i18n.rs"]
+mod i18n;
+
 mod engine {
     #[path = "../../src/engine/tree.rs"]
     pub mod tree;

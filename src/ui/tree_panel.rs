@@ -2,6 +2,8 @@
 //! 节点行右键:复制路径 / 在资源管理器中打开 / 删除目录到回收站。
 
 use crate::engine::tree::{Tree, human_size, ROOT};
+use crate::f;
+use crate::i18n::b;
 use crate::ui::files_panel::show_row_menu;
 use crate::ui::{Filter, RowAction};
 
@@ -27,7 +29,7 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, filter: &Filter) -> TreePanelOut {
         show_flat(ui, tree, filter, &mut out);
         return out;
     }
-    ui.strong("目录树");
+    ui.strong(b("目录树", "Directory tree"));
     egui::ScrollArea::both().show(ui, |ui| {
         let root_size = tree.nodes[ROOT as usize].size;
         show_dir_rows(ui, tree, ROOT, root_size, 0, &mut out);
@@ -37,7 +39,11 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, filter: &Filter) -> TreePanelOut {
 
 /// 过滤模式:全节点扫一遍,按名称+大小阈值命中,扁平显示(上限 FLAT_LIMIT 条)
 fn show_flat(ui: &mut egui::Ui, tree: &Tree, filter: &Filter, out: &mut TreePanelOut) {
-    ui.strong(format!("目录树 — 搜索 “{}”", filter.needle));
+    ui.strong(f!(
+        "目录树 — 搜索 “{}”",
+        "Directory tree — search \u{201c}{}\u{201d}",
+        filter.needle
+    ));
     let mut shown = 0usize;
     let mut total = 0usize;
     egui::ScrollArea::both().show(ui, |ui| {
@@ -56,7 +62,11 @@ fn show_flat(ui: &mut egui::Ui, tree: &Tree, filter: &Filter, out: &mut TreePane
                 "{}  {}{}",
                 node.name,
                 human_size(node.size),
-                if node.denied { " [受限]" } else { "" }
+                if node.denied {
+                    b(" [受限]", " [restricted]")
+                } else {
+                    ""
+                }
             );
             let resp = ui.add(
                 egui::Label::new(egui::RichText::new(label)).sense(egui::Sense::click()),
@@ -64,7 +74,11 @@ fn show_flat(ui: &mut egui::Ui, tree: &Tree, filter: &Filter, out: &mut TreePane
             if resp.clicked() {
                 out.nav = Some(i as u32);
             }
-            resp.on_hover_text(format!("{}\n单击在 Treemap 中定位", path.display()))
+            resp.on_hover_text(f!(
+                "{}\n单击在 Treemap 中定位",
+                "{}\nClick to locate in Treemap",
+                path.display()
+            ))
                 .context_menu(|ui| {
                     if let Some(a) = show_row_menu(&path, ui) {
                         out.action = Some(a);
@@ -73,12 +87,21 @@ fn show_flat(ui: &mut egui::Ui, tree: &Tree, filter: &Filter, out: &mut TreePane
         }
     });
     if total == 0 {
-        ui.label(egui::RichText::new("无匹配目录").weak().italics());
+        ui.label(
+            egui::RichText::new(b("无匹配目录", "No matching directories"))
+                .weak()
+                .italics(),
+        );
     } else if total > shown {
         ui.label(
-            egui::RichText::new(format!("共命中 {total} 个目录,仅显示前 {shown} 个"))
-                .weak()
-                .small(),
+            egui::RichText::new(f!(
+                "共命中 {} 个目录,仅显示前 {} 个",
+                "{} dirs matched, showing the first {}",
+                total,
+                shown
+            ))
+            .weak()
+            .small(),
         );
     }
 }
@@ -103,7 +126,11 @@ fn show_dir_rows(
         } else {
             0.0
         };
-        let denied_tag = if node.denied { " [受限]" } else { "" };
+        let denied_tag = if node.denied {
+            b(" [受限]", " [restricted]")
+        } else {
+            ""
+        };
         let label = format!(
             "{}  {}  {:.1}%{}",
             node.name,
@@ -150,8 +177,12 @@ fn show_dir_rows(
     }
     if total > MAX_CHILDREN_SHOWN {
         ui.label(
-            egui::RichText::new(format!("… 还有 {} 个较小目录未列出", total - MAX_CHILDREN_SHOWN))
-                .weak(),
+            egui::RichText::new(f!(
+                "… 还有 {} 个较小目录未列出",
+                "… {} smaller dirs not listed",
+                total - MAX_CHILDREN_SHOWN
+            ))
+            .weak(),
         );
     }
 }

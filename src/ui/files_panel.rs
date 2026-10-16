@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use crate::engine::scanner::{FileHit, ScanResult};
 use crate::engine::tree::human_size;
+use crate::f;
+use crate::i18n::b;
 use crate::ui::{Filter, RowAction};
 
 /// 排序方式
@@ -62,13 +64,14 @@ pub fn show(
     ui.horizontal(|ui| {
         if !selected.is_empty() {
             ui.label(
-                egui::RichText::new(format!("已选 {} 项", selected.len()))
-                    .color(egui::Color32::LIGHT_YELLOW),
+                egui::RichText::new(f!("已选 {} 项", "{} selected", selected.len()))
+                .color(egui::Color32::LIGHT_YELLOW),
             );
         }
         ui.label(
-            egui::RichText::new(format!(
+            egui::RichText::new(f!(
                 "(匹配 {} 条,渲染前 {} 条;↑↓ 移动光标,空格勾选,Delete 删除)",
+                "(matched {}, rendering first {}; ↑↓ move, Space toggle, Delete remove)",
                 rows.len(),
                 RENDER_LIMIT
             ))
@@ -80,9 +83,12 @@ pub fn show(
     if rows.is_empty() {
         // 过滤后无匹配
         ui.label(
-            egui::RichText::new("无匹配项,请调整搜索词或大小阈值")
-                .weak()
-                .italics(),
+            egui::RichText::new(b(
+                "无匹配项,请调整搜索词或大小阈值",
+                "No matches — adjust the search term or size threshold",
+            ))
+            .weak()
+            .italics(),
         );
         return row_action;
     }
@@ -91,23 +97,32 @@ pub fn show(
         .show(ui, |ui| {
             // 可点击列头排序:当前列显示方向箭头
             ui.horizontal(|ui| {
-                let size_lbl =
-                    if *sort_by == SortBy::Size { "大小 ▼" } else { "大小" };
+                let size_lbl = if *sort_by == SortBy::Size {
+                    format!("{} ▼", b("大小", "Size"))
+                } else {
+                    b("大小", "Size").to_owned()
+                };
                 if ui
-                    .add_sized([100.0, 20.0], egui::Button::new(size_lbl))
+                    .add_sized([110.0, 20.0], egui::Button::new(size_lbl))
                     .clicked()
                 {
                     *sort_by = SortBy::Size;
                 }
-                let name_lbl =
-                    if *sort_by == SortBy::Name { "文件(按路径)▲" } else { "文件" };
+                let name_lbl = if *sort_by == SortBy::Name {
+                    format!("{} ▲", b("文件(按路径)", "File (path)"))
+                } else {
+                    b("文件", "File").to_owned()
+                };
                 if ui.button(name_lbl).clicked() {
                     *sort_by = SortBy::Name;
                 }
                 ui.label(
-                    egui::RichText::new("(双击打开所在目录,右键更多操作)")
-                        .weak()
-                        .small(),
+                    egui::RichText::new(b(
+                        "(双击打开所在目录,右键更多操作)",
+                        "(double-click opens folder, right-click for more)",
+                    ))
+                    .weak()
+                    .small(),
                 );
             });
             ui.separator();
@@ -161,8 +176,9 @@ pub fn show(
                             egui::Label::new(egui::RichText::new(name).strong())
                                 .sense(egui::Sense::click()),
                         );
-                        let resp = resp.on_hover_text(format!(
+                        let resp = resp.on_hover_text(f!(
                             "{}\n双击打开所在目录,右键更多操作",
+                            "{}\nDouble-click to open folder, right-click for menu",
                             path.display()
                         ));
                         if is_focus {
@@ -186,18 +202,22 @@ pub fn show(
 /// 右键菜单三项内容;返回被点击的动作(未点击为 None)
 pub(crate) fn show_row_menu(path: &std::path::Path, ui: &mut egui::Ui) -> Option<RowAction> {
     let mut action = None;
-    if ui.button("复制路径").clicked() {
+    if ui.button(b("复制路径", "Copy path")).clicked() {
         action = Some(RowAction::Copy(path.to_path_buf()));
         ui.close();
     }
-    if ui.button("在资源管理器中打开").clicked() {
+    if ui
+        .button(b("在资源管理器中打开", "Open in Explorer"))
+        .clicked()
+    {
         action = Some(RowAction::Reveal(path.to_path_buf()));
         ui.close();
     }
     ui.separator();
     if ui
         .add(egui::Button::new(
-            egui::RichText::new("删除到回收站").color(egui::Color32::LIGHT_RED),
+            egui::RichText::new(b("删除到回收站", "Delete to Recycle Bin"))
+                .color(egui::Color32::LIGHT_RED),
         ))
         .clicked()
     {

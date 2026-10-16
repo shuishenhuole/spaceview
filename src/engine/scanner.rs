@@ -155,7 +155,11 @@ fn run(
     tx: mpsc::Sender<ScanEvent>,
 ) -> Result<(), String> {
     if !root.is_dir() {
-        return Err(format!("路径不存在或不是目录: {}", root.display()));
+        return Err(crate::f!(
+            "路径不存在或不是目录: {}",
+            "Path does not exist or is not a directory: {}",
+            root.display()
+        ));
     }
 
     let denied: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
@@ -256,7 +260,8 @@ fn run(
                     let ext = path
                         .extension()
                         .map(|e| e.to_string_lossy().to_lowercase())
-                        .unwrap_or_else(|| "(无扩展名)".to_string());
+                        // 固定字面量作为统计键,展示层再翻译,避免语言切换破坏键匹配
+                .unwrap_or_else(|| "(无扩展名)".to_string());
                     let e = exts.entry(ext).or_insert((0, 0));
                     e.0 += 1;
                     e.1 += len;
@@ -340,7 +345,7 @@ fn run(
         total_files: files,
         total_bytes: bytes,
     })))
-    .map_err(|_| "UI 已关闭".to_string())
+    .map_err(|_| crate::i18n::b("UI 已关闭", "UI closed").to_string())
 }
 
 fn dir_display_name(path: &Path, root: &Path) -> String {

@@ -8,6 +8,8 @@ use std::sync::Arc;
 
 use crate::engine::scanner::{self, ScanEvent, ScanResult};
 use crate::engine::tree::ROOT;
+use crate::f;
+use crate::i18n::b;
 use crate::ui::{
     extension_panel, files_panel, status_bar, toolbar, tree_panel, treemap_panel, Filter,
     RowAction,
@@ -87,6 +89,10 @@ pub struct AnalyseApp {
     tree_fade: Option<std::time::Instant>,
     /// 上一帧是否展示了结果面板,用于检测"出现"时刻
     showing_result: bool,
+    /// 已应用到系统的窗口标题文本(语言切换时更新)
+    applied_title: Option<String>,
+    /// 缓存的原生窗口句柄(标题会随语言变化,句柄只查一次)
+    hwnd_cache: Option<isize>,
 }
 
 impl Default for AnalyseApp {
@@ -127,6 +133,8 @@ impl Default for AnalyseApp {
             applied_titlebar: None,
             tree_fade: None,
             showing_result: false,
+            applied_title: None,
+            hwnd_cache: None,
         }
     }
 }
@@ -142,7 +150,7 @@ fn list_drives() -> Vec<PathBuf> {
 /// 大小阈值下拉的显示文案
 fn size_threshold_label(v: u64) -> String {
     match v {
-        0 => "不限大小".to_owned(),
+        0 => b("不限大小", "Any size").to_owned(),
         10_485_760 => "> 10MB".to_owned(),
         104_857_600 => "> 100MB".to_owned(),
         _ => "> 1GB".to_owned(),
@@ -264,7 +272,8 @@ impl AnalyseApp {
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
-                    self.state = AppState::Failed("扫描线程意外退出".into());
+                    self.state =
+                        AppState::Failed(b("扫描线程意外退出", "Scan thread exited unexpectedly").into());
                     return;
                 }
             }
@@ -330,9 +339,19 @@ impl AnalyseApp {
         }
         self.message = Some((
             if errs.is_empty() {
-                format!("已删除 {ok} 项到回收站")
+                f!(
+                    "已删除 {} 项到回收站",
+                    "Deleted {} item(s) to Recycle Bin",
+                    ok
+                )
             } else {
-                format!("已删除 {ok} 项;{} 项失败:{}", errs.len(), errs[0])
+                f!(
+                    "已删除 {} 项;{} 项失败:{}",
+                    "Deleted {}; {} failed: {}",
+                    ok,
+                    errs.len(),
+                    errs[0]
+                )
             },
             std::time::Instant::now(),
         ));
@@ -360,13 +379,17 @@ impl AnalyseApp {
                         self.progress.paused_secs += p.elapsed().as_secs_f32();
                     }
                     self.set_message(if now {
-                        "已暂停扫描,可随时继续".to_string()
+                        b("已暂停扫描,可随时继续", "Scan paused, resume anytime").to_string()
                     } else {
-                        "已继续扫描".to_string()
+                        b("已继续扫描", "Scan resumed").to_string()
                     });
                 }
             }
             toolbar::ToolbarAction::ToggleTheme => self.dark = !self.dark,
+            // 语言切换:更新全局开关,所有 b() 取词处即时生效
+            toolbar::ToolbarAction::ToggleLang => {
+                crate::i18n::set_en(!crate::i18n::is_en());
+            }
         }
     }
 
@@ -412,18 +435,29 @@ impl AnalyseApp {
         match action {
             RowAction::Copy(p) => {
                 ctx.copy_text(p.display().to_string());
-                self.set_message(format!("已复制路径:{}", p.display()));
+                self.set_message(f!(
+                    "已复制路径:{}",
+                    "Path copied: {}",
+                    p.display()
+                ));
             }
             RowAction::Reveal(p) => {
                 match reveal_in_explorer(&p) {
                     Ok(()) => {}
-                    Err(e) => self.set_message(format!("打开资源管理器失败:{e}")),
+                    Err(e) => self.set_message(f!(
+                        "打开资源管理器失败:{}",
+                        "Open Explorer failed: {}",
+                        e
+                    )),
                 }
             }
             RowAction::Delete(p) => {
-                // 复用现有“勾选 → 确认对话框 → perform_delete”流程;扫描中禁止删除
+                // 复用现有"勾选 → 确认对话框 → perform_delete"流程;扫描中禁止删除
                 if self.is_scanning() {
-                    self.set_message("扫描进行中,请等待完成后再删除".to_string());
+                    self.set_message(
+                        b("扫描进行中,请等待完成后再删除", "Scan in progress, delete after it finishes")
+                            .to_string(),
+                    );
                 } else {
                     self.selected = vec![p];
                     self.confirm_delete = true;
@@ -449,15 +483,18 @@ impl AnalyseApp {
     ) -> Option<RowAction> {
         if scanning {
             ui.label(
-                egui::RichText::new("正在扫描 — 以下为已扫描部分的实时结果,完成后自动刷新")
-                    .weak()
-                    .italics(),
+                egui::RichText::new(b(
+                    "正在扫描 — 以下为已扫描部分的实时结果,完成后自动刷新",
+                    "Scanning — live partial results, refreshed on completion",
+                ))
+                .weak()
+                .italics(),
             );
         }
         // Tab:大文件 TopN / 扩展名统计 / Treemap
         ui.horizontal(|ui| {
-            ui.selectable_value(tab, Tab::TopFiles, "大文件 TopN");
-            ui.selectable_value(tab, Tab::Extensions, "按类型统计");
+            ui.selectable_value(tab, Tab::TopFiles, b("大文件 TopN", "Top Files"));
+            ui.selectable_value(tab, Tab::Extensions, b("按类型统计", "By Type"));
             ui.selectable_value(tab, Tab::Treemap, "Treemap");
         });
         ui.separator();
@@ -496,8 +533,9 @@ impl AnalyseApp {
                 let current = *drill.last().unwrap();
                 let node = &result.tree.nodes[current as usize];
                 ui.label(
-                    egui::RichText::new(format!(
+                    egui::RichText::new(f!(
                         "当前视图:{} — {}",
+                        "Current view: {} — {}",
                         node.name,
                         crate::engine::tree::human_size(node.size)
                     ))
@@ -569,7 +607,9 @@ fn reveal_in_explorer(path: &std::path::Path) -> std::io::Result<()> {
     #[cfg(not(windows))]
     {
         let _ = path;
-        Err(std::io::Error::other("仅 Windows 支持打开资源管理器"))
+        Err(std::io::Error::other(
+            b("仅 Windows 支持打开资源管理器", "Explorer reveal is Windows-only"),
+        ))
     }
 }
 
@@ -649,11 +689,25 @@ impl eframe::App for AnalyseApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // 原生标题栏主题同步:变化时下发一次 DWM 属性
+        // 窗口标题随语言更新:文本变化才下发 SetTitle
+        let title = b("磁盘空间分析", "Disk Space Analyzer").to_owned();
+        if self.applied_title.as_deref() != Some(title.as_str()) {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.applied_title = Some(title);
+        }
+        // 原生标题栏主题同步:变化时下发一次 DWM 属性;
+        // 标题会随语言改变,句柄查到一次后缓存
         if self.applied_titlebar != Some(self.dark) {
             #[cfg(windows)]
-            if let Some(hwnd) = find_hwnd_by_title("磁盘空间分析") {
-                set_titlebar_dark(hwnd, self.dark);
+            {
+                if self.hwnd_cache.is_none() {
+                    self.hwnd_cache = find_hwnd_by_title("磁盘空间分析")
+                        .or_else(|| find_hwnd_by_title("Disk Space Analyzer"));
+                }
+                if let Some(hwnd) = self.hwnd_cache {
+                    set_titlebar_dark(hwnd, self.dark);
+                }
             }
             self.applied_titlebar = Some(self.dark);
         }
@@ -718,10 +772,10 @@ impl eframe::App for AnalyseApp {
         if self.view_ref().is_some() {
             egui::Panel::top("filter_bar").show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("过滤:");
+                    ui.label(b("过滤:", "Filter:"));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.filter_text)
-                            .hint_text("搜索目录/文件名")
+                            .hint_text(b("搜索目录/文件名", "Search folders / files"))
                             .desired_width(220.0),
                     );
                     if !self.filter_text.is_empty() && ui.button("✕").clicked() {
@@ -731,7 +785,7 @@ impl eframe::App for AnalyseApp {
                     egui::ComboBox::from_id_salt("size_threshold")
                         .selected_text(size_threshold_label(min))
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut min, 0, "不限大小");
+                            ui.selectable_value(&mut min, 0, b("不限大小", "Any size"));
                             ui.selectable_value(&mut min, 10 * 1024 * 1024, "> 10MB");
                             ui.selectable_value(&mut min, 100 * 1024 * 1024, "> 100MB");
                             ui.selectable_value(&mut min, 1024 * 1024 * 1024, "> 1GB");
@@ -769,12 +823,17 @@ impl eframe::App for AnalyseApp {
                     ui,
                 );
             } else if scanning {
-                ui.centered_and_justified(|ui| ui.heading("正在扫描,请稍候…"));
+                ui.centered_and_justified(|ui| {
+                    ui.heading(b("正在扫描,请稍候…", "Scanning, please wait…"))
+                });
             } else {
-                ui.heading("磁盘空间分析工具");
-                if !matches!(self.state, AppState::Failed(_)) {
-                    ui.label("选择扫描目标后点击“开始扫描”。");
-                }
+                ui.heading(b("磁盘空间分析工具", "Disk Space Analyzer"));
+                ui.centered_and_justified(|ui| {
+                    ui.label(b(
+                        "选择扫描目标后点击“开始扫描”。",
+                        "Pick a scan target, then click \u{201c}Start Scan\u{201d}.",
+                    ))
+                });
             }
         });
         self.tab = tab;
@@ -828,7 +887,7 @@ impl eframe::App for AnalyseApp {
             let list = self.selected.clone();
             let mut do_it = false;
             let mut cancel = false;
-            let _ = egui::Window::new("确认删除到回收站")
+            let _ = egui::Window::new(b("确认删除到回收站", "Confirm delete to Recycle Bin"))
                 .id(egui::Id::new("del_confirm"))
                 .collapsible(false)
                 .resizable(false)
@@ -838,19 +897,24 @@ impl eframe::App for AnalyseApp {
                         ui.label(egui::RichText::new(p.display().to_string()).small());
                     }
                     if n > 5 {
-                        ui.label(egui::RichText::new(format!("… 共 {n} 项")).weak());
+                        ui.label(
+                            egui::RichText::new(f!("… 共 {} 项", "… {} items in total", n))
+                            .weak(),
+                        );
                     }
-                    ui.separator();
                     ui.separator();
                     ui.horizontal(|ui| {
                         if ui.add(egui::Button::new(
-                            egui::RichText::new("删除到回收站").color(egui::Color32::LIGHT_RED),
+                            egui::RichText::new(
+                                b("删除到回收站", "Delete to Recycle Bin"),
+                            )
+                            .color(egui::Color32::LIGHT_RED),
                         ))
                         .clicked()
                         {
                             do_it = true;
                         }
-                        if ui.button("取消").clicked() {
+                        if ui.button(b("取消", "Cancel")).clicked() {
                             cancel = true;
                         }
                     });
@@ -864,8 +928,9 @@ impl eframe::App for AnalyseApp {
         }
     }
 
-    /// 周期性保存(eframe 自动调用):目前仅持久化主题选择
+    /// 周期性保存(eframe 自动调用):持久化主题与语言选择
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string("theme", if self.dark { "dark" } else { "light" }.to_owned());
+        storage.set_string("lang", if crate::i18n::is_en() { "en" } else { "zh" }.to_owned());
     }
 }

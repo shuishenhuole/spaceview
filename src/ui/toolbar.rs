@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use crate::app::Target;
+use crate::i18n::{b, is_en};
 
 /// 渲染所需的只读视图
 pub struct ToolbarView<'a> {
@@ -26,6 +27,7 @@ pub enum ToolbarAction {
     CancelScan,
     TogglePause,
     ToggleTheme,
+    ToggleLang,
 }
 
 pub fn show(view: &ToolbarView, ui: &mut egui::Ui) -> Option<ToolbarAction> {
@@ -53,41 +55,60 @@ pub fn show(view: &ToolbarView, ui: &mut egui::Ui) -> Option<ToolbarAction> {
             });
         }
         Target::Folder(_) => {
-            ui.label("自定义文件夹");
+            ui.label(b("自定义文件夹", "Custom folder"));
         }
     }
 
     ui.separator();
 
     ui.add_enabled_ui(!view.scanning, |ui| {
-        if ui.button("浏览…").clicked() {
+        if ui.button(b("浏览…", "Browse…")).clicked() {
             action = Some(ToolbarAction::OpenFolderPicker);
         }
     });
 
     // 当前目标路径预览
     ui.label(
-        egui::RichText::new(format!("扫描目标: {}", view.target_path.display()))
-            .color(ui.visuals().weak_text_color()),
+        egui::RichText::new(crate::f!(
+            "扫描目标: {}",
+            "Target: {}",
+            view.target_path.display()
+        ))
+        .color(ui.visuals().weak_text_color()),
     );
 
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        // 语言切换:按钮显示"目标语言"
+        if ui.button(if is_en() { "中文" } else { "EN" }).clicked() {
+            action = Some(ToolbarAction::ToggleLang);
+        }
         // 主题切换(不受扫描状态影响)
-        let theme_label = if view.dark { "☀ 浅色" } else { "🌙 深色" };
+        let theme_label = if view.dark {
+            b("☀ 浅色", "☀ Light")
+        } else {
+            b("🌙 深色", "🌙 Dark")
+        };
         if ui.button(theme_label).clicked() {
             action = Some(ToolbarAction::ToggleTheme);
         }
         if view.scanning {
             if ui
                 .add(egui::Button::new(
-                    egui::RichText::new("取消").color(egui::Color32::LIGHT_RED),
+                    egui::RichText::new(b("取消", "Cancel")).color(egui::Color32::LIGHT_RED),
                 ))
                 .clicked()
             {
                 action = Some(ToolbarAction::CancelScan);
             }
             // 暂停/继续:挂起扫描线程消费,已扫描结果仍可查看
-            if ui.button(if view.paused { "继续" } else { "暂停" }).clicked() {
+            if ui
+                .button(if view.paused {
+                    b("继续", "Resume")
+                } else {
+                    b("暂停", "Pause")
+                })
+                .clicked()
+            {
                 action = Some(ToolbarAction::TogglePause);
             }
             // 暂停时静态图标替代转圈,避免视觉上仍在运行
@@ -96,7 +117,10 @@ pub fn show(view: &ToolbarView, ui: &mut egui::Ui) -> Option<ToolbarAction> {
             } else {
                 ui.spinner();
             }
-        } else if ui.add(egui::Button::new("开始扫描")).clicked() {
+        } else if ui
+            .add(egui::Button::new(b("开始扫描", "Start Scan")))
+            .clicked()
+        {
             action = Some(ToolbarAction::StartScan);
         }
     });
