@@ -227,6 +227,7 @@ fn run(
                         file_count: 0,
                         children: Vec::new(),
                         denied: false,
+                        deleted: false,
                     });
                     if let Some(p) = parent {
                         tree.nodes[p as usize].children.push(idx);

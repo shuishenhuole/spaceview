@@ -12,6 +12,9 @@ pub struct DirNode {
     pub file_count: u64,        // 聚合后的文件数
     pub children: Vec<u32>,     // 子目录索引
     pub denied: bool,           // 读取被拒(如 System Volume Information)
+    /// 本次会话内已删除到回收站:大小清零但保留在父节点 children 中,
+    /// Treemap/目录树以"已删除"占位块显示
+    pub deleted: bool,
 }
 
 /// Arena 存储的目录树
@@ -39,6 +42,7 @@ impl Tree {
                 file_count: 0,
                 children: Vec::new(),
                 denied: false,
+                deleted: false,
             }],
         }
     }
@@ -80,7 +84,8 @@ impl Tree {
         }
     }
 
-    /// 目录被删除后同步树:整个子树大小清零、从父节点 children 摘除、沿祖先链回减
+    /// 目录被删除后同步树:整个子树大小清零并标记"已删除",
+    /// 节点保留在父 children 中作占位,沿祖先链回减
     pub fn remove_subtree(&mut self, idx: u32) {
         let (size, files) = {
             let n = &self.nodes[idx as usize];
@@ -94,14 +99,16 @@ impl Tree {
             node.file_count = 0;
             stack.extend(node.children.iter().copied());
         }
-        // 从父节点摘除,并向祖先回减
+        self.nodes[idx as usize].deleted = true;
+        // 向祖先回减(不从父 children 摘除,保留占位)
         if let Some(p) = self.nodes[idx as usize].parent {
-            self.nodes[p as usize].children.retain(|&x| x != idx);
             self.subtract(p, size, files);
         }
     }
 
     /// 直接子目录按大小降序 (idx, name, size)
+    // UI 已改为直接遍历 children(需读取 deleted 标记),此助手仅冒烟测试使用
+    #[allow(dead_code)]
     pub fn sorted_children(&self, idx: u32) -> Vec<(u32, String, u64)> {
         let mut v: Vec<(u32, String, u64)> = self.nodes[idx as usize]
             .children

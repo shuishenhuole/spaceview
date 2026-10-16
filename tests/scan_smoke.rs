@@ -83,3 +83,40 @@ fn trash_delete_moves_to_recycle_bin() {
     trash::delete(&f).expect("回收站删除失败");
     assert!(!f.exists());
 }
+
+/// 删除同步:子树清零、父 children 保留占位并标记 deleted,祖先回减
+#[test]
+fn remove_subtree_keeps_tombstone() {
+    let mut t = tree::Tree::new(PathBuf::from("C:\\"));
+    let a = t.push_node(tree::DirNode {
+        parent: Some(tree::ROOT),
+        name: "a".into(),
+        size: 100,
+        file_count: 2,
+        children: Vec::new(),
+        denied: false,
+        deleted: false,
+    });
+    let b = t.push_node(tree::DirNode {
+        parent: Some(a),
+        name: "b".into(),
+        size: 60,
+        file_count: 1,
+        children: Vec::new(),
+        denied: false,
+        deleted: false,
+    });
+    t.nodes[a as usize].children.push(b);
+    t.nodes[tree::ROOT as usize].children.push(a);
+    t.nodes[tree::ROOT as usize].size = 100;
+    t.nodes[tree::ROOT as usize].file_count = 2;
+
+    t.remove_subtree(a);
+
+    assert!(t.nodes[tree::ROOT as usize].children.contains(&a), "占位节点应保留在父 children 中");
+    assert!(t.nodes[a as usize].deleted);
+    assert_eq!(t.nodes[a as usize].size, 0);
+    assert_eq!(t.nodes[b as usize].size, 0);
+    assert_eq!(t.nodes[tree::ROOT as usize].size, 0);
+    assert_eq!(t.nodes[tree::ROOT as usize].file_count, 0);
+}

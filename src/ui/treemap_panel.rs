@@ -70,13 +70,22 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
         return (None, None);
     }
 
-    // 项 = 子目录 + 本目录直属文件(灰色块)
-    let mut items: Vec<(Option<u32>, u64)> = tree
-        .sorted_children(current)
-        .into_iter()
-        .map(|(idx, _, size)| (Some(idx), size))
+    // 项 = 子目录 + 本目录直属文件(灰色块);已删除目录以固定小权重占位显示
+    let cur_size = tree.nodes[current as usize].size;
+    let tomb_weight = (cur_size / 40).max(1);
+    let mut items: Vec<(Option<u32>, u64)> = tree.nodes[current as usize]
+        .children
+        .iter()
+        .map(|&c| {
+            let n = &tree.nodes[c as usize];
+            (Some(c), if n.deleted { tomb_weight } else { n.size })
+        })
         .collect();
-    let children_sum: u64 = items.iter().map(|(_, s)| *s).sum();
+    let children_sum: u64 = tree.nodes[current as usize]
+        .children
+        .iter()
+        .map(|&c| tree.nodes[c as usize].size)
+        .sum();
     let own_files = tree.nodes[current as usize]
         .size
         .saturating_sub(children_sum);
@@ -119,8 +128,6 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
 
     let mut clicked = None;
     let mut row_action: Option<RowAction> = None;
-    // 当前目录总大小,用于色块悬停占比
-    let cur_size = tree.nodes[current as usize].size;
 
     for (n, (marker, r)) in laid.iter().enumerate() {
         // 动画矩形与不透明度:按 marker 匹配旧状态
@@ -143,11 +150,18 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
         if da < 0.02 {
             continue;
         }
+        // 本次会话已删除到回收站的目录:占位显示,不可下钻/删除
+        let is_del = marker.is_some_and(|idx| tree.nodes[idx as usize].deleted);
         let (label, size, count_tag) = match marker {
             Some(idx) => {
                 let node = &tree.nodes[*idx as usize];
+                let name = if node.deleted {
+                    format!("{} · {}", node.name, b("已删除", "deleted"))
+                } else {
+                    node.name.clone()
+                };
                 (
-                    node.name.clone(),
+                    name,
                     node.size,
                     f!("{} 个文件", "{} files", node.file_count),
                 )
@@ -168,6 +182,11 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
             [170, 214, 214], [226, 200, 160], [190, 175, 226], [180, 214, 180],
         ];
         let fill = match marker {
+            Some(_) if is_del => egui::Color32::from_gray(if !ui.visuals().dark_mode {
+                205
+            } else {
+                78
+            }),
             Some(_) => {
                 let c = PALETTE[n % PALETTE.len()];
                 egui::Color32::from_rgb(c[0], c[1], c[2])
@@ -196,6 +215,15 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
             egui::Stroke::new(1.0, fade(ui.visuals().window_fill(), da)),
             egui::StrokeKind::Inside,
         );
+        // 已删除块:红色描边强调
+        if is_del {
+            painter.rect_stroke(
+                dr,
+                1.0,
+                egui::Stroke::new(1.5, egui::Color32::from_rgb(205, 92, 92)),
+                egui::StrokeKind::Inside,
+            );
+        }
 
         // 文字:仅在矩形够大时绘制;高度充足时名字与占用大小分两行,空间不够则合并为一行
         // 截断按像素宽度估算(中文≈1em、ASCII≈0.55em),避免中文名溢出
@@ -242,7 +270,7 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
         };
         let resp = ui.interact(*r, ui.id().with(("tm", n)), egui::Sense::click());
         if let Some(idx) = marker {
-            if resp.clicked() {
+            if resp.clicked() && !is_del {
                 clicked = Some(*idx);
             }
         }
@@ -264,8 +292,8 @@ pub fn show(ui: &mut egui::Ui, tree: &Tree, current: u32) -> (Option<u32>, Optio
                 egui::StrokeKind::Inside,
             );
         }
-        // 灰色块不提供删除(删目录会把直属文件一起删,语义留给具体目录块)
-        if marker.is_some() {
+        // 灰色块不提供删除(删目录会把直属文件一起删,语义留给具体目录块);已删除块无菜单
+        if marker.is_some() && !is_del {
             resp2.context_menu(|ui| {
                 if let Some(a) = show_row_menu(&menu_path, ui) {
                     row_action = Some(a);

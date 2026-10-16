@@ -62,7 +62,9 @@ fn show_flat(ui: &mut egui::Ui, tree: &Tree, filter: &Filter, out: &mut TreePane
                 "{}  {}{}",
                 node.name,
                 human_size(node.size),
-                if node.denied {
+                if node.deleted {
+                    b(" [已删除]", " [deleted]")
+                } else if node.denied {
                     b(" [受限]", " [restricted]")
                 } else {
                     ""
@@ -71,7 +73,7 @@ fn show_flat(ui: &mut egui::Ui, tree: &Tree, filter: &Filter, out: &mut TreePane
             let resp = ui.add(
                 egui::Label::new(egui::RichText::new(label)).sense(egui::Sense::click()),
             );
-            if resp.clicked() {
+            if resp.clicked() && !node.deleted {
                 out.nav = Some(i as u32);
             }
             resp.on_hover_text(f!(
@@ -126,7 +128,9 @@ fn show_dir_rows(
         } else {
             0.0
         };
-        let denied_tag = if node.denied {
+        let denied_tag = if node.deleted {
+            b(" [已删除]", " [deleted]")
+        } else if node.denied {
             b(" [受限]", " [restricted]")
         } else {
             ""
@@ -139,7 +143,8 @@ fn show_dir_rows(
             denied_tag
         );
         let dir_path = tree.dir_path(c);
-        if node.children.is_empty() {
+        // 已删除目录按叶子行显示(子树已清零,不再展开)
+        if node.children.is_empty() || node.deleted {
             let resp = ui.add(
                 egui::ProgressBar::new(pct)
                     .text(label)
@@ -151,7 +156,7 @@ fn show_dir_rows(
                 ui.id().with(("trow", c)),
                 egui::Sense::click(),
             );
-            if click.clicked() {
+            if click.clicked() && !node.deleted {
                 out.nav = Some(c);
             }
             click.context_menu(|ui| {
