@@ -92,24 +92,35 @@ fn window_icon() -> Option<egui::IconData> {
     Some(egui::IconData { rgba: out, width: TW as u32, height: TH as u32 })
 }
 
-/// 尝试加载 Windows 系统中文字体(微软雅黑优先,依次回退)
+/// 尝试加载系统中文字体(Windows 微软雅黑 / macOS 苹方 / Linux Noto CJK,依次回退)
 fn setup_cjk_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    const CANDIDATES: [&str; 3] = [
+    const CANDIDATES: &[&str] = &[
+        // Windows
         "C:\\Windows\\Fonts\\msyh.ttc",
         "C:\\Windows\\Fonts\\msyh.ttf",
         "C:\\Windows\\Fonts\\simhei.ttf",
+        // macOS
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/Library/Fonts/Arial Unicode.ttf",
+        // Linux
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/arphic/uming.ttc",
     ];
     for path in CANDIDATES {
         if let Ok(data) = std::fs::read(path) {
             fonts.font_data.insert(
-                "win_cjk".to_owned(),
+                "system_cjk".to_owned(),
                 egui::FontData::from_owned(data).into(),
             );
             // 追加到比例与等宽字体族末尾,作为中文缺字的回退
             for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
                 if let Some(list) = fonts.families.get_mut(&family) {
-                    list.push("win_cjk".to_owned());
+                    list.push("system_cjk".to_owned());
                 }
             }
             break;

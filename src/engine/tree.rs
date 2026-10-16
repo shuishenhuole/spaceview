@@ -7,7 +7,7 @@ use std::path::PathBuf;
 #[derive(Clone)]
 pub struct DirNode {
     pub parent: Option<u32>,    // 父目录索引,None 表示根
-    pub name: String,           // 显示名(相对父级);根节点为盘符全路径
+    pub name: String,           // 显示名(相对父级);根节点为挂载点全路径
     pub size: u64,              // 聚合后的总字节
     pub file_count: u64,        // 聚合后的文件数
     pub children: Vec<u32>,     // 子目录索引

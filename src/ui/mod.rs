@@ -16,7 +16,7 @@ pub enum RowAction {
     Copy(PathBuf),
     /// 删除到回收站(文件或目录)
     Delete(PathBuf),
-    /// 在系统资源管理器中打开(目录打开自身,文件打开所在目录并选中)
+    /// 在系统文件管理器中打开(目录打开自身,文件打开所在目录并选中)
     Reveal(PathBuf),
 }
 

@@ -32,8 +32,8 @@ pub fn show(state: &AppState, progress: &Progress, ui: &mut egui::Ui) {
     match state {
         AppState::Idle => {
             ui.label(b(
-                "就绪:选择盘符或文件夹后点击“开始扫描”。",
-                "Ready: pick a drive or folder, then click \u{201c}Start Scan\u{201d}.",
+                "就绪:选择存储位置或文件夹后点击“开始扫描”。",
+                "Ready: pick a location or folder, then click \u{201c}Start Scan\u{201d}.",
             ));
         }
         AppState::Scanning { paused, .. } => {

@@ -23,7 +23,7 @@ pub enum Tab {
     Treemap,
 }
 
-/// 扫描目标来源:盘符 或 用户选择的任意文件夹
+/// 扫描目标来源:顶层存储位置(盘符/挂载卷) 或 用户选择的任意文件夹
 #[derive(Clone, PartialEq)]
 pub enum Target {
     Drive(usize), // drives[drive] 的下标
@@ -51,7 +51,7 @@ pub enum AppState {
 
 /// 顶层应用结构体
 pub struct AnalyseApp {
-    /// 本机枚举出的盘符,如 ["C:\\", "D:\\"]
+    /// 本机枚举出的顶层存储位置,如 ["C:\\", "D:\\"] 或 ["/", "/Volumes/…"]
     pub(crate) drives: Vec<PathBuf>,
     /// 当前选中的扫描目标
     pub(crate) target: Target,
@@ -91,14 +91,15 @@ pub struct AnalyseApp {
     showing_result: bool,
     /// 已应用到系统的窗口标题文本(语言切换时更新)
     applied_title: Option<String>,
-    /// 缓存的原生窗口句柄(标题会随语言变化,句柄只查一次)
+    /// 缓存的原生窗口句柄(标题会随语言变化,句柄只查一次;仅 Windows 标题栏主题用)
+    #[cfg(windows)]
     hwnd_cache: Option<isize>,
 }
 
 impl Default for AnalyseApp {
     fn default() -> Self {
         let drives = list_drives();
-        // 默认选中 C 盘;找不到则取第一个
+        // 默认选中系统盘(Windows 的 C 盘 / POSIX 的根分区);找不到则取第一个
         let target = Target::Drive(
             drives
                 .iter()
@@ -134,17 +135,38 @@ impl Default for AnalyseApp {
             tree_fade: None,
             showing_result: false,
             applied_title: None,
+            #[cfg(windows)]
             hwnd_cache: None,
         }
     }
 }
 
-/// 枚举 A-Z 中实际存在的盘符
+/// 枚举可扫描的顶层存储位置
+#[cfg(windows)]
 fn list_drives() -> Vec<PathBuf> {
+    // Windows:A-Z 中实际存在的盘符
     ('A'..='Z')
         .map(|c| PathBuf::from(format!("{c}:\\")))
         .filter(|p| p.is_dir())
         .collect()
+}
+
+/// 枚举可扫描的顶层存储位置
+#[cfg(not(windows))]
+fn list_drives() -> Vec<PathBuf> {
+    // POSIX:根分区 + 外挂卷(macOS 挂 /Volumes,Linux 挂 /media 或 /run/media/<user>)
+    let mut v = vec![PathBuf::from("/")];
+    for mount_dir in ["/Volumes", "/media", "/run/media"] {
+        if let Ok(rd) = std::fs::read_dir(mount_dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    v.push(p);
+                }
+            }
+        }
+    }
+    v
 }
 
 /// 大小阈值下拉的显示文案
@@ -165,7 +187,7 @@ impl AnalyseApp {
                 .drives
                 .get(*i)
                 .cloned()
-                .unwrap_or_else(|| PathBuf::from("C:\\")),
+                .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" })),
             Target::Folder(p) => p.clone(),
         }
     }
@@ -442,11 +464,11 @@ impl AnalyseApp {
                 ));
             }
             RowAction::Reveal(p) => {
-                match reveal_in_explorer(&p) {
+                match reveal_in_file_manager(&p) {
                     Ok(()) => {}
                     Err(e) => self.set_message(f!(
-                        "打开资源管理器失败:{}",
-                        "Open Explorer failed: {}",
+                        "打开文件管理器失败:{}",
+                        "Open file manager failed: {}",
                         e
                     )),
                 }
@@ -631,11 +653,12 @@ fn set_titlebar_dark(hwnd: isize, dark: bool) {
     }
 }
 
-/// 在 Windows 资源管理器中打开:path 为目录则打开自身,为文件则打开所在目录并选中
-fn reveal_in_explorer(path: &std::path::Path) -> std::io::Result<()> {
+/// 在系统文件管理器中打开:path 为目录则打开自身,为文件则打开所在目录并尽量选中。
+/// Windows→explorer,macOS→open -R,Linux→xdg-open(打开所在目录)。
+fn reveal_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
+    let is_dir = std::fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false);
     #[cfg(windows)]
     {
-        let is_dir = std::fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false);
         let mut cmd = std::process::Command::new("explorer");
         if is_dir {
             cmd.arg(path.as_os_str());
@@ -645,11 +668,31 @@ fn reveal_in_explorer(path: &std::path::Path) -> std::io::Result<()> {
         // explorer.exe 成功时退出码也常为 1,spawn 即视为打开,不 wait 输出
         cmd.spawn().map(|_| ())
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
-        let _ = path;
+        // Finder:文件用 -R 在所在目录中揭示并选中,目录直接打开
+        let mut cmd = std::process::Command::new("open");
+        if !is_dir {
+            cmd.arg("-R");
+        }
+        cmd.arg(path);
+        cmd.spawn().map(|_| ())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // freedesktop:xdg-open 打开所在目录(多数文件管理器不保证选中具体文件)
+        let dir = if is_dir {
+            path.to_path_buf()
+        } else {
+            path.parent().unwrap_or(path).to_path_buf()
+        };
+        std::process::Command::new("xdg-open").arg(dir).spawn().map(|_| ())
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (path, is_dir);
         Err(std::io::Error::other(
-            b("仅 Windows 支持打开资源管理器", "Explorer reveal is Windows-only"),
+            b("当前平台不支持打开文件管理器", "Reveal is not supported on this platform"),
         ))
     }
 }
