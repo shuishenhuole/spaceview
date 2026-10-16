@@ -498,7 +498,9 @@ impl AnalyseApp {
             ui.selectable_value(tab, Tab::Treemap, "Treemap");
         });
         ui.separator();
-        match *tab {
+        // 内容区顶部(Tab 栏之下),淡入遮罩只覆盖内容,不遮 Tab 按钮
+        let content_top = ui.cursor().min.y;
+        let row_action = match *tab {
             Tab::TopFiles => {
                 files_panel::show(result, file_sort, selected, focus_row, filter, ui)
             }
@@ -548,8 +550,44 @@ impl AnalyseApp {
                 }
                 tm_action
             }
+        };
+        // Tab 内容淡入:切换 Tab 重置计时;Treemap 自带块动画,只重置计时不盖遮罩
+        let key = egui::Id::new("center_tab_fade");
+        let now = std::time::Instant::now();
+        let t0 = match ui.data(|d| d.get_temp::<TabFade>(key)) {
+            Some(f) if f.tab == *tab => f.t0,
+            _ => {
+                ui.data_mut(|d| d.insert_temp(key, TabFade { tab: *tab, t0: now }));
+                now
+            }
+        };
+        if *tab != Tab::Treemap {
+            let t = now.duration_since(t0).as_secs_f32() / 0.28;
+            if t < 1.0 {
+                let rect = ui.min_rect();
+                let [r, g, b, _] = ui.visuals().panel_fill.to_array();
+                ui.painter().rect_filled(
+                    egui::Rect::from_min_max(egui::pos2(rect.min.x, content_top), rect.max),
+                    0.0,
+                    egui::Color32::from_rgba_unmultiplied(
+                        r,
+                        g,
+                        b,
+                        ((1.0 - t).clamp(0.0, 1.0) * 255.0) as u8,
+                    ),
+                );
+                ui.ctx().request_repaint();
+            }
         }
+        row_action
     }
+}
+
+/// 中央面板 Tab 内容淡入状态(存于 egui temp data,按 Tab 切换重置)
+#[derive(Clone)]
+struct TabFade {
+    tab: Tab,
+    t0: std::time::Instant,
 }
 
 /// 按窗口标题查找顶层窗口句柄(单实例,标题固定为"磁盘空间分析")
@@ -725,6 +763,16 @@ impl eframe::App for AnalyseApp {
         let has_result = self.view_ref().is_some();
         if has_result && !self.showing_result {
             self.tree_fade = Some(std::time::Instant::now());
+            // 中央面板内容随结果首次出现一起淡入(重置 temp 计时)
+            ui.data_mut(|d| {
+                d.insert_temp(
+                    egui::Id::new("center_tab_fade"),
+                    TabFade {
+                        tab: self.tab,
+                        t0: std::time::Instant::now(),
+                    },
+                )
+            });
         }
         self.showing_result = has_result;
         if let Some(result) = self.view_ref() {
