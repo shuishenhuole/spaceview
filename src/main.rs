@@ -32,6 +32,13 @@ fn main() -> eframe::Result {
                 }
                 i18n::set_en(storage.get_string("lang").as_deref() == Some("en"));
             }
+            // 命令行传入目录路径时作为初始扫描目标(各平台通用)
+            if let Some(arg) = std::env::args().nth(1) {
+                let p = std::path::PathBuf::from(&arg);
+                if p.is_dir() {
+                    app.target = app::Target::Folder(p);
+                }
+            }
             Ok(Box::new(app))
         }),
     )

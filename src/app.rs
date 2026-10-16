@@ -935,38 +935,44 @@ impl eframe::App for AnalyseApp {
             let list = self.selected.clone();
             let mut do_it = false;
             let mut cancel = false;
-            let _ = egui::Window::new(b("确认删除到回收站", "Confirm delete to Recycle Bin"))
-                .id(egui::Id::new("del_confirm"))
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ui, |ui| {
-                    for p in list.iter().take(5) {
-                        ui.label(egui::RichText::new(p.display().to_string()).small());
-                    }
-                    if n > 5 {
-                        ui.label(
-                            egui::RichText::new(f!("… 共 {} 项", "… {} items in total", n))
+            // 真模态弹窗:整屏遮罩会吞掉所有点击,不再穿透到背景 Treemap;
+            // 内容框自动居中,Esc / 点遮罩视为取消
+            let resp = egui::Modal::new(egui::Id::new("del_confirm")).show(ui.ctx(), |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        b("确认删除到回收站", "Confirm delete to Recycle Bin"),
+                    )
+                    .strong(),
+                );
+                for p in list.iter().take(5) {
+                    ui.label(egui::RichText::new(p.display().to_string()).small());
+                }
+                if n > 5 {
+                    ui.label(
+                        egui::RichText::new(f!("… 共 {} 项", "… {} items in total", n))
                             .weak(),
-                        );
+                    );
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.add(egui::Button::new(
+                        egui::RichText::new(
+                            b("删除到回收站", "Delete to Recycle Bin"),
+                        )
+                        .color(egui::Color32::LIGHT_RED),
+                    ))
+                    .clicked()
+                    {
+                        do_it = true;
                     }
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui.add(egui::Button::new(
-                            egui::RichText::new(
-                                b("删除到回收站", "Delete to Recycle Bin"),
-                            )
-                            .color(egui::Color32::LIGHT_RED),
-                        ))
-                        .clicked()
-                        {
-                            do_it = true;
-                        }
-                        if ui.button(b("取消", "Cancel")).clicked() {
-                            cancel = true;
-                        }
-                    });
+                    if ui.button(b("取消", "Cancel")).clicked() {
+                        cancel = true;
+                    }
                 });
+            });
+            if resp.should_close() {
+                cancel = true;
+            }
             if do_it {
                 self.perform_delete();
             }
