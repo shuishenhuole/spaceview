@@ -11,9 +11,14 @@ use crate::engine::tree::ROOT;
 use crate::f;
 use crate::i18n::b;
 use crate::ui::{
-    extension_panel, files_panel, status_bar, toolbar, tree_panel, treemap_panel, Filter,
+    extension_panel, files_panel, motion, status_bar, toolbar, tree_panel, treemap_panel, Filter,
     RowAction,
 };
+
+/// 反馈气泡存活时长(秒)
+const TOAST_LIFETIME: f32 = 5.0;
+/// 反馈气泡离场时长(秒)
+const TOAST_EXIT: f32 = 0.7;
 
 /// 中央面板的 Tab 页
 #[derive(PartialEq, Clone, Copy)]
@@ -85,6 +90,12 @@ pub struct AnalyseApp {
     applied_dark: Option<bool>,
     /// 已应用到原生标题栏(DWM)的主题,变化时才下发一次
     applied_titlebar: Option<bool>,
+    /// “减少动画”开关:关闭布局位移动画,仅保留状态反馈(持久化)
+    pub(crate) reduce_motion: bool,
+    /// 已应用的动效偏好,变化时才调整全局 animation_time
+    applied_motion: Option<bool>,
+    /// 扫描会话版本号:每次开始扫描自增,Treemap 据此丢弃上一轮动画
+    pub(crate) view_epoch: u64,
     /// 目录树面板出现淡入动画的起点,None=无动画
     tree_fade: Option<std::time::Instant>,
     /// 上一帧是否展示了结果面板,用于检测"出现"时刻
@@ -132,6 +143,9 @@ impl Default for AnalyseApp {
             dark: true,
             applied_dark: None,
             applied_titlebar: None,
+            reduce_motion: false,
+            applied_motion: None,
+            view_epoch: 0,
             tree_fade: None,
             showing_result: false,
             applied_title: None,
@@ -207,6 +221,8 @@ impl AnalyseApp {
 
     /// 启动后台扫描线程
     fn start_scan(&mut self) {
+        // 新一轮扫描:版本号自增,Treemap 借此丢弃上一轮遗留动画
+        self.view_epoch = self.view_epoch.wrapping_add(1);
         let root = self.target_path();
         let cancel = Arc::new(AtomicBool::new(false));
         let paused = Arc::new(AtomicBool::new(false));
@@ -381,7 +397,8 @@ impl AnalyseApp {
     }
 
     /// 处理工具栏返回的动作
-    fn handle_toolbar_action(&mut self, action: toolbar::ToolbarAction) {        match action {
+    fn handle_toolbar_action(&mut self, action: toolbar::ToolbarAction) {
+        match action {
             toolbar::ToolbarAction::SelectDrive(i) => self.target = Target::Drive(i),
             toolbar::ToolbarAction::OpenFolderPicker => self.open_folder_picker(),
             toolbar::ToolbarAction::StartScan => self.start_scan(),
@@ -408,6 +425,18 @@ impl AnalyseApp {
                 }
             }
             toolbar::ToolbarAction::ToggleTheme => self.dark = !self.dark,
+            toolbar::ToolbarAction::ToggleMotion => {
+                self.reduce_motion = !self.reduce_motion;
+                self.set_message(if self.reduce_motion {
+                    b(
+                        "已减少动画:关闭布局位移,仅保留状态反馈",
+                        "Reduced motion: layout movement off",
+                    )
+                    .to_string()
+                } else {
+                    b("已恢复完整动画", "Full motion restored").to_string()
+                });
+            }
             // 语言切换:更新全局开关,所有 b() 取词处即时生效
             toolbar::ToolbarAction::ToggleLang => {
                 crate::i18n::set_en(!crate::i18n::is_en());
@@ -504,6 +533,8 @@ impl AnalyseApp {
         selected: &mut Vec<PathBuf>,
         focus_row: &mut Option<usize>,
         drill: &mut Vec<u32>,
+        epoch: u64,
+        reduce_motion: bool,
         ui: &mut egui::Ui,
     ) -> Option<RowAction> {
         if scanning {
@@ -569,7 +600,8 @@ impl AnalyseApp {
                     .weak()
                     .small(),
                 );
-                let (clicked, tm_action) = treemap_panel::show(ui, &result.tree, current);
+                let (clicked, tm_action) =
+                    treemap_panel::show(ui, &result.tree, current, epoch, reduce_motion);
                 if let Some(idx) = clicked {
                     drill.push(idx);
                 }
@@ -586,8 +618,10 @@ impl AnalyseApp {
                 now
             }
         };
-        if *tab != Tab::Treemap {
-            let t = now.duration_since(t0).as_secs_f32() / 0.28;
+        if !reduce_motion && *tab != Tab::Treemap {
+            let t = motion::ease_out_cubic(
+                (now.duration_since(t0).as_secs_f32() / motion::ENTER).clamp(0.0, 1.0),
+            );
             if t < 1.0 {
                 let rect = ui.min_rect();
                 let [r, g, b, _] = ui.visuals().panel_fill.to_array();
@@ -731,12 +765,33 @@ impl eframe::App for AnalyseApp {
             ));
             self.applied_dark = Some(self.dark);
         }
-        // 反馈消息 5 秒后自动消失
+        // 动效偏好变化时同步 egui 原生控件动画时长(减少动画≈即时)
+        if self.applied_motion != Some(self.reduce_motion) {
+            let t = if self.reduce_motion {
+                motion::REDUCED
+            } else {
+                motion::NORMAL
+            };
+            ctx.all_styles_mut(|s| s.animation_time = t);
+            self.applied_motion = Some(self.reduce_motion);
+        }
+        // 反馈消息:入场/离场窗口逐帧重绘,静置时只在离场开始时唤醒
         if let Some((_, at)) = &self.message {
-            if at.elapsed() > std::time::Duration::from_secs(5) {
+            let age = at.elapsed().as_secs_f32();
+            if age >= TOAST_LIFETIME {
                 self.message = None;
             } else {
-                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+                let (enter, exit) = if self.reduce_motion {
+                    (motion::REDUCED, motion::REDUCED)
+                } else {
+                    (motion::NORMAL, TOAST_EXIT)
+                };
+                let remaining = TOAST_LIFETIME - age;
+                if age < enter || remaining <= exit {
+                    ctx.request_repaint();
+                } else {
+                    ctx.request_repaint_after(std::time::Duration::from_secs_f32(remaining - exit));
+                }
             }
         }
         // Backspace 在 Treemap 视图返回上一层(输入框获得焦点时不拦截)
@@ -828,20 +883,26 @@ impl eframe::App for AnalyseApp {
                     left_out = tree_panel::show(ui, &result.tree, &filter);
                 });
             if let Some(t0) = self.tree_fade {
-                let t = t0.elapsed().as_secs_f32() / 0.28;
-                if t < 1.0 {
-                    // 用面板底色以递减不透明度覆盖,形成内容淡入效果
-                    let [r, g, b, _] = ui.visuals().panel_fill.to_array();
-                    let cover = egui::Color32::from_rgba_unmultiplied(
-                        r,
-                        g,
-                        b,
-                        ((1.0 - t).clamp(0.0, 1.0) * 255.0) as u8,
-                    );
-                    ui.painter().rect_filled(resp.response.rect, 0.0, cover);
-                    ui.ctx().request_repaint();
-                } else {
+                if self.reduce_motion {
                     self.tree_fade = None;
+                } else {
+                    let t = motion::ease_out_cubic(
+                        (t0.elapsed().as_secs_f32() / motion::ENTER).clamp(0.0, 1.0),
+                    );
+                    if t < 1.0 {
+                        // 用面板底色以递减不透明度覆盖,形成内容淡入效果
+                        let [r, g, b, _] = ui.visuals().panel_fill.to_array();
+                        let cover = egui::Color32::from_rgba_unmultiplied(
+                            r,
+                            g,
+                            b,
+                            ((1.0 - t).clamp(0.0, 1.0) * 255.0) as u8,
+                        );
+                        ui.painter().rect_filled(resp.response.rect, 0.0, cover);
+                        ui.ctx().request_repaint();
+                    } else {
+                        self.tree_fade = None;
+                    }
                 }
             }
         }
@@ -854,6 +915,7 @@ impl eframe::App for AnalyseApp {
             scanning: self.is_scanning(),
             paused: self.is_paused(),
             dark: self.dark,
+            reduce_motion: self.reduce_motion,
         };
         let action = egui::Panel::top("toolbar")
             .show(ui, |ui| ui.horizontal(|ui| toolbar::show(&view, ui)).inner)
@@ -914,6 +976,8 @@ impl eframe::App for AnalyseApp {
                     &mut selected,
                     &mut focus_row,
                     &mut drill,
+                    self.view_epoch,
+                    self.reduce_motion,
                     ui,
                 );
             } else if scanning {
@@ -944,26 +1008,40 @@ impl eframe::App for AnalyseApp {
             self.handle_row_action(a, ui.ctx());
         }
 
-        // 右下角浮动反馈气泡:最后 1 秒线性淡出,5 秒后由 logic() 清除
+        // 右下角浮动反馈气泡:入场淡入上移,离场淡出下沉;静置时只在离场前唤醒
         if let Some((m, at)) = self.message.clone() {
-            let alpha = ((5.0f32 - at.elapsed().as_secs_f32()) / 1.0).clamp(0.0, 1.0);
+            let age = at.elapsed().as_secs_f32();
+            let (enter_dur, exit_dur) = if self.reduce_motion {
+                (motion::REDUCED, motion::REDUCED)
+            } else {
+                (motion::NORMAL, TOAST_EXIT)
+            };
+            let enter = motion::ease_out_cubic((age / enter_dur).clamp(0.0, 1.0));
+            let exit = motion::ease_out_cubic(((TOAST_LIFETIME - age) / exit_dur).clamp(0.0, 1.0));
+            let alpha = enter.min(exit);
+            // 入场从下方 12pt 滑入,离场再下沉 8pt;减少动画时不做位移
+            let slide = if self.reduce_motion {
+                0.0
+            } else {
+                (1.0 - enter) * 12.0 + (1.0 - exit) * 8.0
+            };
             let win_fill = ui.visuals().window_fill();
             egui::Area::new(egui::Id::new("toast"))
                 .order(egui::Order::Foreground)
-                .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -56.0])
+                .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -56.0 + slide])
                 .show(ui.ctx(), |ui| {
                     egui::Frame::new()
-                        .fill(win_fill.linear_multiply(0.1 + 0.85 * alpha))
+                        .fill(motion::with_alpha(win_fill, 0.95 * alpha))
                         .stroke(egui::Stroke::new(
                             1.0,
-                            egui::Color32::LIGHT_GREEN.linear_multiply(alpha),
+                            motion::with_alpha(egui::Color32::LIGHT_GREEN, alpha),
                         ))
                         .corner_radius(8.0)
                         .inner_margin(egui::Margin::same(10))
                         .show(ui, |ui| {
                             ui.label(
                                 egui::RichText::new(m)
-                                    .color(egui::Color32::LIGHT_GREEN.linear_multiply(alpha)),
+                                    .color(motion::with_alpha(egui::Color32::LIGHT_GREEN, alpha)),
                             );
                         });
                 });
@@ -1028,9 +1106,13 @@ impl eframe::App for AnalyseApp {
         }
     }
 
-    /// 周期性保存(eframe 自动调用):持久化主题与语言选择
+    /// 周期性保存(eframe 自动调用):持久化主题、语言与动效偏好
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string("theme", if self.dark { "dark" } else { "light" }.to_owned());
         storage.set_string("lang", if crate::i18n::is_en() { "en" } else { "zh" }.to_owned());
+        storage.set_string(
+            "motion",
+            if self.reduce_motion { "reduced" } else { "full" }.to_owned(),
+        );
     }
 }
