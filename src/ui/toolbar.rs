@@ -17,6 +17,8 @@ pub struct ToolbarView<'a> {
     pub paused: bool,
     /// 当前是否深色主题(决定按钮文案)
     pub dark: bool,
+    /// 是否启用“减少动画”模式(决定按钮文案)
+    pub reduce_motion: bool,
 }
 
 /// 用户点击产生的动作
@@ -27,6 +29,7 @@ pub enum ToolbarAction {
     CancelScan,
     TogglePause,
     ToggleTheme,
+    ToggleMotion,
     ToggleLang,
 }
 
@@ -90,6 +93,22 @@ pub fn show(view: &ToolbarView, ui: &mut egui::Ui) -> Option<ToolbarAction> {
         };
         if ui.button(theme_label).clicked() {
             action = Some(ToolbarAction::ToggleTheme);
+        }
+        // 减少动画开关:关闭布局位移,保留状态反馈
+        let motion_label = if view.reduce_motion {
+            b("动效:关", "Motion: off")
+        } else {
+            b("动效:开", "Motion: on")
+        };
+        if ui
+            .button(motion_label)
+            .on_hover_text(b(
+                "减少动画:关闭布局位移与整层过渡,只保留必要的状态反馈",
+                "Reduce motion: disable layout movement and full-view transitions",
+            ))
+            .clicked()
+        {
+            action = Some(ToolbarAction::ToggleMotion);
         }
         if view.scanning {
             if ui

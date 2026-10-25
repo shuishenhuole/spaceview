@@ -31,6 +31,7 @@ fn main() -> eframe::Result {
                     app.dark = saved != "light";
                 }
                 i18n::set_en(storage.get_string("lang").as_deref() == Some("en"));
+                app.reduce_motion = storage.get_string("motion").as_deref() == Some("reduced");
             }
             // 命令行传入目录路径时作为初始扫描目标(各平台通用)
             if let Some(arg) = std::env::args().nth(1) {

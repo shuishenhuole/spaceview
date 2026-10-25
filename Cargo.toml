@@ -3,6 +3,7 @@ name = "analyse"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+authors = ["shuishenhuole hello@shuishenhuole.cn"]
 
 [dependencies]
 eframe = { version = "0.36", features = ["persistence"] }

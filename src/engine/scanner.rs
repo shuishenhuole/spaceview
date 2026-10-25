@@ -6,6 +6,8 @@
 //!   (父节点总是先于子节点入 Arena,因此逆序遍历即可完成聚合)
 //! - AccessDenied 等错误条目被收集为 denied 样本,不中断整体扫描
 //! - 取消通过外部 Arc<AtomicBool>,主循环每收到一个条目检查一次
+//! - macOS 特殊处理:根扫描跳过 APFS 数据卷的重复挂载点,文件按实际占用计
+//!   (st_blocks)而非逻辑长度,避免稀疏/压缩/克隆文件把总量撑大
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
@@ -148,6 +150,32 @@ pub fn spawn_scan(
     rx
 }
 
+/// 单个文件计入磁盘用量的字节数。
+/// macOS 的 APFS 上逻辑长度(len)与实际占用可能相差极大(稀疏文件如 Docker.raw、
+/// 压缩文件、克隆文件),按 st_blocks 统计才与 Finder“占用”/du 口径一致;
+/// 其他平台沿用逻辑长度,保持既有行为。
+#[cfg(target_os = "macos")]
+pub fn file_disk_size(meta: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.blocks().saturating_mul(512)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn file_disk_size(meta: &std::fs::Metadata) -> u64 {
+    meta.len()
+}
+
+/// 根目录扫描时需要整棵剪掉的重复挂载/外挂卷。
+/// macOS 把数据卷挂在 /System/Volumes/Data,同时以 firmlink 暴露成 /Users、
+/// /Applications 等路径;两处都遍历会把用户数据重复计算,总量接近翻倍。
+/// /Volumes 下是其他磁盘的挂载点,不应算进当前盘的扫描结果。
+#[cfg(target_os = "macos")]
+fn is_duplicate_mount(path: &Path, root: &Path) -> bool {
+    root == Path::new("/")
+        && (path == Path::new("/System/Volumes/Data")
+            || (path != Path::new("/Volumes") && path.starts_with("/Volumes")))
+}
+
 fn run(
     root: PathBuf,
     cancel: Arc<AtomicBool>,
@@ -177,6 +205,8 @@ fn run(
     let mut last_snap = Instant::now();
 
     let denied_ref = &denied;
+    #[cfg(target_os = "macos")]
+    let skip_root = root.clone();
     let walk = jwalk::WalkDirGeneric::<((), Option<u64>)>::new(&root)
         .skip_hidden(false)
         .follow_links(false)
@@ -187,9 +217,15 @@ fn run(
                 .min(16),
         ))
         .process_read_dir(move |_depth, _path, _parent_state, entries| {
+            // 必须在遍历前从 read_dir 结果中移除,才能阻止 jwalk 继续下钻
+            #[cfg(target_os = "macos")]
+            entries.retain(|entry| match entry {
+                Ok(e) => !is_duplicate_mount(&e.path(), &skip_root),
+                Err(_) => true,
+            });
             for entry in entries.iter_mut().flatten() {
                 if !entry.file_type().is_dir() {
-                    entry.client_state = entry.metadata().map(|m| m.len()).ok();
+                    entry.client_state = entry.metadata().map(|m| file_disk_size(&m)).ok();
                 }
             }
             let _ = denied_ref; // 错误统一在主流中收集

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 pub mod extension_panel;
 pub mod files_panel;
+pub mod motion;
 pub mod status_bar;
 pub mod toolbar;
 pub mod tree_panel;

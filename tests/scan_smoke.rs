@@ -22,12 +22,23 @@ use std::sync::Arc;
 fn scan_small_tree() {
     let root: PathBuf = std::env::temp_dir().join(format!("analyse_smoke_{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(root.join("a\\b")).unwrap();
+    fs::create_dir_all(root.join("a").join("b")).unwrap();
     fs::create_dir_all(root.join("c")).unwrap();
     fs::write(root.join("x.bin"), vec![0u8; 1000]).unwrap();
-    fs::write(root.join("a\\y.txt"), vec![0u8; 500]).unwrap();
-    fs::write(root.join("a\\b\\z.log"), vec![0u8; 250]).unwrap();
-    fs::write(root.join("c\\w.bin"), vec![0u8; 100]).unwrap();
+    fs::write(root.join("a").join("y.txt"), vec![0u8; 500]).unwrap();
+    fs::write(root.join("a").join("b").join("z.log"), vec![0u8; 250]).unwrap();
+    fs::write(root.join("c").join("w.bin"), vec![0u8; 100]).unwrap();
+
+    // 扫描器按平台口径计数(macOS 为 st_blocks*512,其余为逻辑长度)
+    let disk_size = |p: &std::path::Path| {
+        engine::scanner::file_disk_size(&fs::metadata(p).unwrap())
+    };
+    let (x, y, z, w) = (
+        disk_size(&root.join("x.bin")),
+        disk_size(&root.join("a").join("y.txt")),
+        disk_size(&root.join("a").join("b").join("z.log")),
+        disk_size(&root.join("c").join("w.bin")),
+    );
 
     let rx = spawn_scan(
         root.clone(),
@@ -52,8 +63,8 @@ fn scan_small_tree() {
         result.tree.nodes[tree::ROOT as usize].size
     );
     // 总大小聚合到根
-    assert_eq!(result.tree.nodes[tree::ROOT as usize].size, 1850);
-    // a\b = 250,a = 750,c = 100
+    assert_eq!(result.tree.nodes[tree::ROOT as usize].size, x + y + z + w);
+    // a/b = z,a = y + z,c = w
     let a_idx = result
         .tree
         .sorted_children(tree::ROOT)
@@ -61,15 +72,15 @@ fn scan_small_tree() {
         .find(|(_, n, _)| n == "a")
         .unwrap()
         .0;
-    assert_eq!(result.tree.nodes[a_idx as usize].size, 750);
+    assert_eq!(result.tree.nodes[a_idx as usize].size, y + z);
 
-    // TopN 降序且最大值 1000
-    assert_eq!(result.top_files[0].size, 1000);
+    // TopN 降序且最大值为四个文件中最大的一个
+    assert_eq!(result.top_files[0].size, [x, y, z, w].into_iter().max().unwrap());
     assert!(result.top_files.windows(2).all(|w| w[0].size >= w[1].size));
 
-    // 扩展名统计含 .bin 共 1100 字节
+    // 扩展名统计含 .bin 共 x + w 字节
     let bin = result.ext_stats.iter().find(|e| e.ext == "bin").unwrap();
-    assert_eq!(bin.bytes, 1100);
+    assert_eq!(bin.bytes, x + w);
     assert_eq!(bin.count, 2);
 
     fs::remove_dir_all(&root).unwrap();
