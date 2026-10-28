@@ -55,7 +55,7 @@ pub enum AppState {
 }
 
 /// 顶层应用结构体
-pub struct AnalyseApp {
+pub struct SpaceViewApp {
     /// 本机枚举出的顶层存储位置,如 ["C:\\", "D:\\"] 或 ["/", "/Volumes/…"]
     pub(crate) drives: Vec<PathBuf>,
     /// 当前选中的扫描目标
@@ -107,7 +107,7 @@ pub struct AnalyseApp {
     hwnd_cache: Option<isize>,
 }
 
-impl AnalyseApp {
+impl SpaceViewApp {
     /// 恢复持久化偏好(主题/语言/动效)。参数为 None 时保持默认值,
     /// 供 main 入口在创建窗口后从 eframe Storage 读取后调用。
     pub fn restore_prefs(&mut self, theme: Option<&str>, lang: Option<&str>, motion: Option<&str>) {
@@ -128,7 +128,7 @@ impl AnalyseApp {
     }
 }
 
-impl Default for AnalyseApp {
+impl Default for SpaceViewApp {
     fn default() -> Self {
         let drives = list_drives();
         // 默认选中系统盘(Windows 的 C 盘 / POSIX 的根分区);找不到则取第一个
@@ -138,7 +138,7 @@ impl Default for AnalyseApp {
                 .position(|d| d.starts_with("C:"))
                 .unwrap_or(0),
         );
-        AnalyseApp {
+        SpaceViewApp {
             drives,
             target,
             folder_rx: None,
@@ -214,7 +214,7 @@ fn size_threshold_label(v: u64) -> String {
     }
 }
 
-impl AnalyseApp {
+impl SpaceViewApp {
     /// 当前选择解析为实际扫描根路径
     pub(crate) fn target_path(&self) -> PathBuf {
         match &self.target {
@@ -670,7 +670,7 @@ struct TabFade {
     t0: std::time::Instant,
 }
 
-/// 按窗口标题查找顶层窗口句柄(单实例,标题固定为"磁盘空间分析")
+/// 按窗口标题查找顶层窗口句柄(单实例,标题固定为"SpaceView")
 #[cfg(windows)]
 fn find_hwnd_by_title(title: &str) -> Option<isize> {
     #[link(name = "user32")]
@@ -752,7 +752,7 @@ fn reveal_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
     }
 }
 
-impl eframe::App for AnalyseApp {
+impl eframe::App for SpaceViewApp {
     /// 每帧先 logic(改状态、收线程事件,不画 UI),再 ui(构建界面)
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // 主题变化时才重建 Visuals
@@ -849,8 +849,8 @@ impl eframe::App for AnalyseApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // 窗口标题随语言更新:文本变化才下发 SetTitle
-        let title = b("磁盘空间分析", "Disk Space Analyzer").to_owned();
+        // 窗口标题固定为产品名,不再随语言变化
+        let title = "SpaceView".to_owned();
         if self.applied_title.as_deref() != Some(title.as_str()) {
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
@@ -862,8 +862,7 @@ impl eframe::App for AnalyseApp {
             #[cfg(windows)]
             {
                 if self.hwnd_cache.is_none() {
-                    self.hwnd_cache = find_hwnd_by_title("磁盘空间分析")
-                        .or_else(|| find_hwnd_by_title("Disk Space Analyzer"));
+                    self.hwnd_cache = find_hwnd_by_title("SpaceView");
                 }
                 if let Some(hwnd) = self.hwnd_cache {
                     set_titlebar_dark(hwnd, self.dark);
@@ -1006,7 +1005,7 @@ impl eframe::App for AnalyseApp {
                     ui.heading(b("正在扫描,请稍候…", "Scanning, please wait…"))
                 });
             } else {
-                ui.heading(b("磁盘空间分析工具", "Disk Space Analyzer"));
+                ui.heading("SpaceView");
                 ui.centered_and_justified(|ui| {
                     ui.label(b(
                         "选择扫描目标后点击“开始扫描”。",

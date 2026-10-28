@@ -60,7 +60,7 @@
 
     <Product
         Id='*'
-        Name='analyse'
+        Name='SpaceView'
         UpgradeCode='ADDED6FC-D534-45F7-92A9-55831603C9A8'
         Manufacturer='shuishenhuole hello@shuishenhuole.cn'
         Language='1033'
@@ -82,11 +82,11 @@
             DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
 
         <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
-        <Property Id='DiskPrompt' Value='analyse Installation'/>
+        <Property Id='DiskPrompt' Value='SpaceView Installation'/>
 
         <Directory Id='TARGETDIR' Name='SourceDir'>
             <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
-                <Directory Id='APPLICATIONFOLDER' Name='analyse'>
+                <Directory Id='APPLICATIONFOLDER' Name='SpaceView'>
                     <!--
                       Disabling the license sidecar file in the installer is a two step process:
 
@@ -115,9 +115,9 @@
                         <Component Id='binary0' Guid='*'>
                             <File
                                 Id='exe0'
-                                Name='analyse.exe'
+                                Name='spaceview.exe'
                                 DiskId='1'
-                                Source='$(var.CargoTargetBinDir)\analyse.exe'
+                                Source='$(var.CargoTargetBinDir)\spaceview.exe'
                                 KeyPath='yes'/>
                         </Component>
                     </Directory>

@@ -1,4 +1,4 @@
-# 磁盘空间分析工具(storeanalyse)
+# SpaceView(spaceview)
 
 一个 Windows 平台的磁盘空间分析桌面工具,定位类似 SpaceSniffer / WizTree:
 并行扫描目录树,实时展示扫描进度,并以大文件列表、类型统计和 Treemap 矩形树三种视角帮你找出占空间的"元凶"。
@@ -56,7 +56,7 @@ src/
 # 开发模式运行
 cargo run
 
-# 发布构建(产物在 target/release/analyse.exe)
+# 发布构建(产物在 target/release/spaceview.exe)
 cargo build --release
 
 # 运行测试

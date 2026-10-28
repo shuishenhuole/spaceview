@@ -2,6 +2,14 @@
 
 本项目版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [未发布]
+
+### 变更
+
+- 项目重命名:Cargo 包名与库名统一为 `spaceview`,可执行文件为 `spaceview.exe`。
+- 工具显示名改为 **SpaceView**,窗口标题、界面标题与 Windows 安装包(产品名、安装目录、快捷方式)同步更新。
+- 顶层应用结构体 `AnalyseApp` 更名为 `SpaceViewApp`。
+
 ## [1.0.1] - 2026-10-28
 
 ### 新增

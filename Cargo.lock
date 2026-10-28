@@ -160,19 +160,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "analyse"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui",
- "jwalk",
- "png 0.17.16",
- "rfd",
- "trash",
- "winres",
-]
-
-[[package]]
 name = "android-activity"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3069,6 +3056,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "spaceview"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "jwalk",
+ "png 0.17.16",
+ "rfd",
+ "trash",
+ "winres",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 //! 扫描引擎冒烟测试:构造小目录树,验证大小聚合与 TopN。
 
-use analyse::engine::{scanner, tree};
+use spaceview::engine::{scanner, tree};
 use scanner::{ScanEvent, spawn_scan};
 use std::fs;
 use std::path::PathBuf;
@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 #[test]
 fn scan_small_tree() {
-    let root: PathBuf = std::env::temp_dir().join(format!("analyse_smoke_{}", std::process::id()));
+    let root: PathBuf = std::env::temp_dir().join(format!("spaceview_smoke_{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("a").join("b")).unwrap();
     fs::create_dir_all(root.join("c")).unwrap();
@@ -78,7 +78,7 @@ fn scan_small_tree() {
 /// 验证 trash 在本机能正常删除到回收站
 #[test]
 fn trash_delete_moves_to_recycle_bin() {
-    let f = std::env::temp_dir().join(format!("analyse_trash_test_{}.txt", std::process::id()));
+    let f = std::env::temp_dir().join(format!("spaceview_trash_test_{}.txt", std::process::id()));
     fs::write(&f, b"qoder test file, safe to delete").unwrap();
     trash::delete(&f).expect("回收站删除失败");
     assert!(!f.exists());
