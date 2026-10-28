@@ -8,16 +8,25 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RELEASE_NAME: Rust
+  RELEASE_NAME: SpaceView
 
 jobs:
   build:
-    name: Build ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.os }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu
+            arch: x86_64
+            runner: ubuntu-latest
+          - os: macos
+            arch: aarch64
+            runner: macos-14
+          - os: windows
+            arch: x86_64
+            runner: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -27,37 +36,51 @@ jobs:
         with:
           toolchain: stable
           override: true
+          target: ${{ matrix.os }}-${{ matrix.arch }}-unknown-${{ matrix.os == 'macos' && 'darwin' || matrix.os == 'ubuntu' && 'linux-gnu' || 'msvc' }}
 
       - name: Build release binary
-        run: cargo build --release --verbose
+        run: cargo build --release --verbose --target ${{ matrix.os }}-${{ matrix.arch }}-unknown-${{ matrix.os == 'macos' && 'darwin' || matrix.os == 'ubuntu' && 'linux-gnu' || 'msvc' }}
 
       - name: Run tests
         run: cargo test --verbose
 
+      - name: Get binary name
+        id: bin_name
+        run: |
+          cargo read-manifest | jq -r '.name' > binname.txt
+          echo "BIN=$(cat binname.txt)" >> $GITHUB_OUTPUT
+        shell: bash
+
       - name: Set artifact name
         id: artifact_name
         run: |
-          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
-            echo "NAME=${{ github.event.repository.name }}-linux-x86_64.tar.gz" >> $GITHUB_OUTPUT
-          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-            echo "NAME=${{ github.event.repository.name }}-macos-x86_64.tar.gz" >> $GITHUB_OUTPUT
-          elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            echo "NAME=${{ github.event.repository.name }}-windows-x86_64.zip" >> $GITHUB_OUTPUT
+          BIN=${{ steps.bin_name.outputs.BIN }}
+          if [[ "${{ matrix.os }}" == "ubuntu" ]]; then
+            echo "NAME=${BIN}-linux-${{ matrix.arch }}.tar.gz" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.os }}" == "macos" ]]; then
+            echo "NAME=${BIN}-macos-${{ matrix.arch }}.tar.gz" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.os }}" == "windows" ]]; then
+            echo "NAME=${BIN}-windows-${{ matrix.arch }}.zip" >> $GITHUB_OUTPUT
           fi
         shell: bash
 
       - name: Package Linux / macOS
-        if: matrix.os != 'windows-latest'
+        if: matrix.os != 'windows'
         run: |
-          cd target/release
-          tar -czf ${{ steps.artifact_name.outputs.NAME }} ${{ github.event.repository.name }}
-          mv ${{ steps.artifact_name.outputs.NAME }} ../../
+          BIN=${{ steps.bin_name.outputs.BIN }}
+          TARGET_DIR=target/${{ matrix.os }}-${{ matrix.arch }}-unknown-${{ matrix.os == 'macos' && 'darwin' || matrix.os == 'ubuntu' && 'linux-gnu' || 'msvc' }}/release
+          cd $TARGET_DIR
+          tar -czf ${{ steps.artifact_name.outputs.NAME }} $BIN
+          mv ${{ steps.artifact_name.outputs.NAME }} ../../../../
+        shell: bash
 
       - name: Package Windows
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows'
         run: |
-          cd target/release
-          Compress-Archive -Path ${{ github.event.repository.name }}.exe -DestinationPath ../../${{ steps.artifact_name.outputs.NAME }}
+          $BIN = "${{ steps.bin_name.outputs.BIN }}"
+          $TARGET_DIR = "target/${{ matrix.os }}-${{ matrix.arch }}-unknown-msvc/release"
+          cd $TARGET_DIR
+          Compress-Archive -Path "$BIN.exe" -DestinationPath "../../../../${{ steps.artifact_name.outputs.NAME }}"
         shell: pwsh
 
       - name: Upload artifact
