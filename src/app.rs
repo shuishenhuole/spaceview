@@ -107,6 +107,27 @@ pub struct AnalyseApp {
     hwnd_cache: Option<isize>,
 }
 
+impl AnalyseApp {
+    /// 恢复持久化偏好(主题/语言/动效)。参数为 None 时保持默认值,
+    /// 供 main 入口在创建窗口后从 eframe Storage 读取后调用。
+    pub fn restore_prefs(&mut self, theme: Option<&str>, lang: Option<&str>, motion: Option<&str>) {
+        if let Some(theme) = theme {
+            self.dark = theme != "light";
+        }
+        if let Some(lang) = lang {
+            crate::i18n::set_en(lang == "en");
+        }
+        if let Some(motion) = motion {
+            self.reduce_motion = motion == "reduced";
+        }
+    }
+
+    /// 命令行传入目录时作为初始扫描目标
+    pub fn set_target_folder(&mut self, path: PathBuf) {
+        self.target = Target::Folder(path);
+    }
+}
+
 impl Default for AnalyseApp {
     fn default() -> Self {
         let drives = list_drives();

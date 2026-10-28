@@ -1,12 +1,7 @@
 //! 程序入口:创建 eframe 窗口并注册中文字体。
 #![windows_subsystem = "windows"] // release 构建时不弹出控制台黑窗
 
-mod app;
-mod engine;
-mod i18n;
-mod ui;
-
-pub use app::AnalyseApp;
+use analyse::app::AnalyseApp;
 
 fn main() -> eframe::Result {
     let mut viewport = egui::ViewportBuilder::default()
@@ -25,19 +20,19 @@ fn main() -> eframe::Result {
             // egui 默认字体不含 CJK,中文会显示为方块,启动时先注册系统字体
             setup_cjk_fonts(&cc.egui_ctx);
             let mut app = AnalyseApp::default();
-            // 读取上次保存的主题与语言偏好
+            // 读取上次保存的主题、语言与动效偏好
             if let Some(storage) = cc.storage {
-                if let Some(saved) = storage.get_string("theme") {
-                    app.dark = saved != "light";
-                }
-                i18n::set_en(storage.get_string("lang").as_deref() == Some("en"));
-                app.reduce_motion = storage.get_string("motion").as_deref() == Some("reduced");
+                app.restore_prefs(
+                    storage.get_string("theme").as_deref(),
+                    storage.get_string("lang").as_deref(),
+                    storage.get_string("motion").as_deref(),
+                );
             }
             // 命令行传入目录路径时作为初始扫描目标(各平台通用)
             if let Some(arg) = std::env::args().nth(1) {
                 let p = std::path::PathBuf::from(&arg);
                 if p.is_dir() {
-                    app.target = app::Target::Folder(p);
+                    app.set_target_folder(p);
                 }
             }
             Ok(Box::new(app))

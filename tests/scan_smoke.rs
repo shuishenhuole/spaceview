@@ -1,18 +1,7 @@
 //! 扫描引擎冒烟测试:构造小目录树,验证大小聚合与 TopN。
 
-// scanner.rs 依赖 crate 根的 i18n(文案选取与 f! 宏),测试独立编译时一并引入
-#[path = "../src/i18n.rs"]
-mod i18n;
-
-mod engine {
-    #[path = "../../src/engine/tree.rs"]
-    pub mod tree;
-    #[path = "../../src/engine/scanner.rs"]
-    pub mod scanner;
-}
-
-use engine::scanner::{ScanEvent, spawn_scan};
-use engine::tree;
+use analyse::engine::{scanner, tree};
+use scanner::{ScanEvent, spawn_scan};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -31,7 +20,7 @@ fn scan_small_tree() {
 
     // 扫描器按平台口径计数(macOS 为 st_blocks*512,其余为逻辑长度)
     let disk_size = |p: &std::path::Path| {
-        engine::scanner::file_disk_size(&fs::metadata(p).unwrap())
+        scanner::file_disk_size(&fs::metadata(p).unwrap())
     };
     let (x, y, z, w) = (
         disk_size(&root.join("x.bin")),
