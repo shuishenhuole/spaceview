@@ -1,4 +1,4 @@
-name: Rust Build & Release
+name: SpaceView Build & Release
 
 on:
   push:
@@ -6,9 +6,18 @@ on:
   pull_request:
     branches: [ "master" ]
 
+# 默认只读;创建 Release 的 job 单独提升为 write
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RELEASE_NAME: SpaceView
+
+# PR 上连续推送时取消旧任务;master 上的发布任务不取消
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -18,82 +27,83 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu
+          - os: linux
             arch: x86_64
             runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
           - os: macos
+            # macos-latest 为 Apple Silicon(arm64)runner
             arch: aarch64
-            runner: macos-14
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
           - os: windows
             arch: x86_64
             runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          override: true
-          target: ${{ matrix.os }}-${{ matrix.arch }}-unknown-${{ matrix.os == 'macos' && 'darwin' || matrix.os == 'ubuntu' && 'linux-gnu' || 'msvc' }}
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release --verbose --target ${{ matrix.os }}-${{ matrix.arch }}-unknown-${{ matrix.os == 'macos' && 'darwin' || matrix.os == 'ubuntu' && 'linux-gnu' || 'msvc' }}
+        run: cargo build --release --verbose --target ${{ matrix.target }}
 
       - name: Run tests
         run: cargo test --verbose
 
-      - name: Get binary name
-        id: bin_name
-        run: |
-          cargo read-manifest | jq -r '.name' > binname.txt
-          echo "BIN=$(cat binname.txt)" >> $GITHUB_OUTPUT
+      - name: Resolve binary and artifact name
+        id: artifact
         shell: bash
-
-      - name: Set artifact name
-        id: artifact_name
         run: |
-          BIN=${{ steps.bin_name.outputs.BIN }}
-          if [[ "${{ matrix.os }}" == "ubuntu" ]]; then
-            echo "NAME=${BIN}-linux-${{ matrix.arch }}.tar.gz" >> $GITHUB_OUTPUT
-          elif [[ "${{ matrix.os }}" == "macos" ]]; then
-            echo "NAME=${BIN}-macos-${{ matrix.arch }}.tar.gz" >> $GITHUB_OUTPUT
-          elif [[ "${{ matrix.os }}" == "windows" ]]; then
-            echo "NAME=${BIN}-windows-${{ matrix.arch }}.zip" >> $GITHUB_OUTPUT
-          fi
+          # Windows runner 上 cargo/jq 可能输出 CRLF,去掉 \r 避免污染产物名
+          BIN=$(cargo read-manifest | jq -r '.name' | tr -d '\r')
+          echo "BIN=$BIN" >> "$GITHUB_OUTPUT"
+          echo "NAME=${BIN}-${{ matrix.os }}-${{ matrix.arch }}.${{ matrix.archive }}" >> "$GITHUB_OUTPUT"
+
+      - name: Package (Linux / macOS)
+        if: matrix.archive == 'tar.gz'
         shell: bash
-
-      - name: Package Linux / macOS
-        if: matrix.os != 'windows'
         run: |
-          BIN=${{ steps.bin_name.outputs.BIN }}
-          TARGET_DIR=target/${{ matrix.os }}-${{ matrix.arch }}-unknown-${{ matrix.os == 'macos' && 'darwin' || matrix.os == 'ubuntu' && 'linux-gnu' || 'msvc' }}/release
-          cd $TARGET_DIR
-          tar -czf ${{ steps.artifact_name.outputs.NAME }} $BIN
-          mv ${{ steps.artifact_name.outputs.NAME }} ../../../../
-        shell: bash
+          mkdir -p dist
+          tar -czf "dist/${{ steps.artifact.outputs.NAME }}" \
+            -C "target/${{ matrix.target }}/release" \
+            "${{ steps.artifact.outputs.BIN }}"
 
-      - name: Package Windows
-        if: matrix.os == 'windows'
-        run: |
-          $BIN = "${{ steps.bin_name.outputs.BIN }}"
-          $TARGET_DIR = "target/${{ matrix.os }}-${{ matrix.arch }}-unknown-msvc/release"
-          cd $TARGET_DIR
-          Compress-Archive -Path "$BIN.exe" -DestinationPath "../../../../${{ steps.artifact_name.outputs.NAME }}"
+      - name: Package (Windows)
+        if: matrix.archive == 'zip'
         shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive `
+            -Path "target/${{ matrix.target }}/release/${{ steps.artifact.outputs.BIN }}.exe" `
+            -DestinationPath "dist/${{ steps.artifact.outputs.NAME }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.artifact_name.outputs.NAME }}
-          path: ${{ steps.artifact_name.outputs.NAME }}
+          name: ${{ steps.artifact.outputs.NAME }}
+          path: dist/${{ steps.artifact.outputs.NAME }}
+          if-no-files-found: error
 
   release:
     name: Create Release
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
