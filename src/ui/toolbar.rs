@@ -13,6 +13,8 @@ pub struct ToolbarView<'a> {
     /// 当前目标解析出的实际路径(用于预览)
     pub target_path: PathBuf,
     pub scanning: bool,
+    /// 是否有后台删除任务(期间禁用目标切换与开始扫描)
+    pub deleting: bool,
     /// 扫描是否处于暂停中(决定暂停/继续按钮文案)
     pub paused: bool,
     /// 当前是否深色主题(决定按钮文案)
@@ -45,7 +47,7 @@ pub fn show(view: &ToolbarView, ui: &mut egui::Ui) -> Option<ToolbarAction> {
     match view.target {
         Target::Drive(i) => {
             let current = labels.get(*i).cloned().unwrap_or_default();
-            ui.add_enabled_ui(!view.scanning, |ui| {
+            ui.add_enabled_ui(!view.scanning && !view.deleting, |ui| {
                 egui::ComboBox::from_id_salt("drive_combo")
                     .selected_text(current)
                     .show_ui(ui, |ui| {
@@ -64,7 +66,7 @@ pub fn show(view: &ToolbarView, ui: &mut egui::Ui) -> Option<ToolbarAction> {
 
     ui.separator();
 
-    ui.add_enabled_ui(!view.scanning, |ui| {
+    ui.add_enabled_ui(!view.scanning && !view.deleting, |ui| {
         if ui.button(b("浏览…", "Browse…")).clicked() {
             action = Some(ToolbarAction::OpenFolderPicker);
         }
@@ -136,6 +138,10 @@ pub fn show(view: &ToolbarView, ui: &mut egui::Ui) -> Option<ToolbarAction> {
             } else {
                 ui.spinner();
             }
+        } else if view.deleting {
+            // 删除期间不提供"开始扫描":删除结果要同步回本轮扫描结果
+            ui.label(b("后台删除中…", "Deleting in background…"));
+            ui.spinner();
         } else if ui
             .add(egui::Button::new(b("开始扫描", "Start Scan")))
             .clicked()

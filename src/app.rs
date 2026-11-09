@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
 
+use crate::engine::deleter::{self, DeleteEvent, DeleteJob};
 use crate::engine::scanner::{self, ScanEvent, ScanResult};
 use crate::engine::tree::ROOT;
 use crate::f;
@@ -74,6 +75,8 @@ pub struct SpaceViewApp {
     drill: Vec<u32>,
     /// 大文件列表中勾选待删除的文件(以路径为键)
     selected: Vec<PathBuf>,
+    /// 正在后台执行的删除任务;有值时显示进度,并禁止重复删除与重新扫描
+    deleting: Option<DeleteJob>,
     /// 是否弹出删除确认框
     confirm_delete: bool,
     /// 搜索关键词(不区分大小写,匹配目录名/文件完整路径)
@@ -156,6 +159,7 @@ impl Default for SpaceViewApp {
             file_sort: files_panel::SortBy::Size,
             drill: vec![ROOT],
             selected: Vec::new(),
+            deleting: None,
             confirm_delete: false,
             filter_text: String::new(),
             filter_min_bytes: 0,
@@ -232,6 +236,11 @@ impl SpaceViewApp {
         matches!(self.state, AppState::Scanning { .. })
     }
 
+    /// 是否有后台删除任务在执行(期间禁止再次删除与重新扫描)
+    fn is_deleting(&self) -> bool {
+        self.deleting.is_some()
+    }
+
     /// 扫描是否处于暂停中
     fn is_paused(&self) -> bool {
         matches!(
@@ -242,6 +251,17 @@ impl SpaceViewApp {
 
     /// 启动后台扫描线程
     fn start_scan(&mut self) {
+        // 删除结果要同步回本轮扫描结果,删除中重新扫描会造成模型错位
+        if self.is_deleting() {
+            self.set_message(
+                b(
+                    "删除正在后台进行,请等待完成或取消后再扫描",
+                    "Wait for the background delete to finish or cancel it before scanning",
+                )
+                .to_string(),
+            );
+            return;
+        }
         // 新一轮扫描:版本号自增,Treemap 借此丢弃上一轮遗留动画
         self.view_epoch = self.view_epoch.wrapping_add(1);
         let root = self.target_path();
@@ -347,74 +367,128 @@ impl SpaceViewApp {
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
 
-    /// 将勾选文件删除到回收站,并同步回减目录树大小、TopN 与扩展名统计
+    /// 确认后启动后台删除:本函数立即返回,回收站 I/O 全部在 deleter 线程执行。
+    /// 结果事件由 `poll_delete_events` 消费,内存模型在任务结束时批量同步。
     fn perform_delete(&mut self) {
-        let AppState::Done(result) = &mut self.state else {
+        self.confirm_delete = false;
+        if self.is_deleting() || self.is_scanning() {
+            return;
+        }
+        if !matches!(self.state, AppState::Done(_)) {
+            return;
+        }
+        let paths = std::mem::take(&mut self.selected);
+        if paths.is_empty() {
+            return;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.deleting = Some(deleter::spawn_delete(paths, cancel, self.view_epoch));
+    }
+
+    /// 每帧消费后台删除事件:期间只累计进度(O(事件数)),结束时才同步模型
+    fn poll_delete_events(&mut self, ctx: &egui::Context) {
+        let Some(mut job) = self.deleting.take() else {
             return;
         };
-        let result = result.as_mut();
-        let mut ok = 0usize;
-        let mut errs: Vec<String> = Vec::new();
-        for path in std::mem::take(&mut self.selected) {
-            match trash::delete(&path) {
-                Ok(()) => {
-                    if let Some(pos) = result.top_files.iter().position(|h| h.path == path) {
-                        let (dir_idx, size) = {
-                            let hit = &result.top_files[pos];
-                            (hit.dir_idx, hit.size)
-                        };
-                        result.tree.subtract(dir_idx, size, 1);
-                        let ext = path
-                            .extension()
-                            .map(|e| e.to_string_lossy().to_lowercase())
-                            .unwrap_or_else(|| "(无扩展名)".to_string());
-                        if let Some(st) = result.ext_stats.iter_mut().find(|e| e.ext == ext) {
-                            st.count = st.count.saturating_sub(1);
-                            st.bytes = st.bytes.saturating_sub(size);
+        let mut finished = false;
+        loop {
+            match job.rx.try_recv() {
+                Ok(DeleteEvent::Started(p)) => job.current = Some(p),
+                Ok(DeleteEvent::Item(outcome)) => {
+                    job.done += 1;
+                    job.current = None;
+                    match outcome.error {
+                        None => {
+                            job.ok += 1;
+                            job.succeeded.push(outcome.path);
                         }
-                        result.top_files.remove(pos);
-                        result.total_bytes = result.total_bytes.saturating_sub(size);
-                        result.total_files = result.total_files.saturating_sub(1);
-                    } else {
-                        // 目录删除:按路径找到节点,子树清零并从树上摘除
-                        let dir_idx = (0..result.tree.nodes.len() as u32)
-                            .find(|&i| result.tree.dir_path(i) == path);
-                        if let Some(idx) = dir_idx {
-                            let (sz, fc) = (
-                                result.tree.nodes[idx as usize].size,
-                                result.tree.nodes[idx as usize].file_count,
-                            );
-                            result.tree.remove_subtree(idx);
-                            result.total_bytes = result.total_bytes.saturating_sub(sz);
-                            result.total_files = result.total_files.saturating_sub(fc);
-                            // 被删目录下的文件若出现在 TopN,一并剔除
-                            result.top_files.retain(|h| !h.path.starts_with(&path));
+                        Some(err) => {
+                            job.errors
+                                .push(format!("{} — {err}", outcome.path.display()));
+                            // 失败项回到勾选集合,方便直接重试
+                            if !self.selected.contains(&outcome.path) {
+                                self.selected.push(outcome.path);
+                            }
                         }
                     }
-                    ok += 1;
                 }
-                Err(e) => errs.push(format!("{} — {e}", path.display())),
+                Ok(DeleteEvent::Done) => {
+                    finished = true;
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    job.errors.push(
+                        b("删除线程意外退出", "Delete thread exited unexpectedly").to_string(),
+                    );
+                    finished = true;
+                    break;
+                }
             }
         }
-        self.message = Some((
-            if errs.is_empty() {
-                f!(
-                    "已删除 {} 项到回收站",
-                    "Deleted {} item(s) to Recycle Bin",
-                    ok
-                )
-            } else {
-                f!(
-                    "已删除 {} 项;{} 项失败:{}",
-                    "Deleted {}; {} failed: {}",
-                    ok,
-                    errs.len(),
-                    errs[0]
-                )
-            },
-            std::time::Instant::now(),
-        ));
-        self.confirm_delete = false;
+        if !finished {
+            self.deleting = Some(job);
+            // 后台任务持续期间保持低频重绘,刷新状态栏进度
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            return;
+        }
+        self.finish_delete(job, ctx);
+    }
+
+    /// 任务收尾:批量同步模型 + 汇总反馈 + 恢复未处理项
+    fn finish_delete(&mut self, job: DeleteJob, ctx: &egui::Context) {
+        let cancelled = job.cancelled();
+        // 删除期间用户可能又勾选了待删项;成功项已从磁盘移走,从勾选集合剔除
+        if !job.succeeded.is_empty() {
+            self.selected.retain(|p| !job.succeeded.contains(p));
+        }
+        // 取消或线程异常时,尚未处理的路径回到勾选集合,便于稍后重试
+        if job.done < job.total {
+            for p in job.paths.iter().skip(job.done) {
+                if !self.selected.contains(p) {
+                    self.selected.push(p.clone());
+                }
+            }
+        }
+        // 只有扫描结果仍是发起删除时的那一轮,才把变化同步回模型
+        let can_apply = job.epoch == self.view_epoch && matches!(self.state, AppState::Done(_));
+        if can_apply && !job.succeeded.is_empty() {
+            if let AppState::Done(result) = &mut self.state {
+                result.apply_deleted(&job.succeeded);
+            }
+        }
+        let mut msg = if job.errors.is_empty() {
+            f!(
+                "已删除 {} 项到回收站",
+                "Deleted {} item(s) to Recycle Bin",
+                job.ok
+            )
+        } else {
+            f!(
+                "已删除 {} 项;{} 项失败:{}",
+                "Deleted {}; {} failed: {}",
+                job.ok,
+                job.errors.len(),
+                job.errors[0]
+            )
+        };
+        if cancelled {
+            msg = f!(
+                "{};已取消剩余 {} 项",
+                "{}; cancelled {} remaining",
+                msg,
+                job.total.saturating_sub(job.done)
+            );
+        }
+        if !can_apply && job.ok > 0 {
+            msg = f!(
+                "{};扫描结果已刷新,请重新扫描以同步占用",
+                "{}; results refreshed, rescan to sync usage",
+                msg
+            );
+        }
+        self.set_message(msg);
+        ctx.request_repaint();
     }
 
     /// 处理工具栏返回的动作
@@ -524,8 +598,16 @@ impl SpaceViewApp {
                 }
             }
             RowAction::Delete(p) => {
-                // 复用现有"勾选 → 确认对话框 → perform_delete"流程;扫描中禁止删除
-                if self.is_scanning() {
+                // 复用现有"勾选 → 确认对话框 → perform_delete"流程;扫描/删除中禁止再次发起
+                if self.is_deleting() {
+                    self.set_message(
+                        b(
+                            "删除正在后台进行,请等待完成或取消剩余项",
+                            "A delete job is running in the background; wait or cancel it",
+                        )
+                        .to_string(),
+                    );
+                } else if self.is_scanning() {
                     self.set_message(
                         b("扫描进行中,请等待完成后再删除", "Scan in progress, delete after it finishes")
                             .to_string(),
@@ -846,6 +928,10 @@ impl eframe::App for SpaceViewApp {
         if self.is_scanning() {
             self.poll_scan_events(ctx);
         }
+        // 轮询后台删除事件(删除 I/O 全在工作线程,这里只做轻量状态累计)
+        if self.is_deleting() {
+            self.poll_delete_events(ctx);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -933,6 +1019,7 @@ impl eframe::App for SpaceViewApp {
             target: &self.target,
             target_path: self.target_path(),
             scanning: self.is_scanning(),
+            deleting: self.is_deleting(),
             paused: self.is_paused(),
             dark: self.dark,
             reduce_motion: self.reduce_motion,
@@ -971,9 +1058,22 @@ impl eframe::App for SpaceViewApp {
             });
         }
 
+        let mut cancel_delete = false;
+        let deleting = self.deleting.as_ref();
         egui::Panel::bottom("status").show(ui, |ui| {
             status_bar::show(&self.state, &self.progress, ui);
+            if let Some(job) = deleting {
+                cancel_delete = status_bar::show_delete_progress(job, ui);
+            }
         });
+        if cancel_delete {
+            if let Some(job) = &self.deleting {
+                job.cancel.store(true, Ordering::Relaxed);
+            }
+            self.set_message(
+                b("已请求取消剩余删除项", "Cancelling remaining delete items").to_string(),
+            );
+        }
         // 中央面板:Tab 状态先在局部复制渲染,结束后写回,避免借用冲突
         let mut tab = self.tab;
         let mut file_sort = self.file_sort;
@@ -1071,10 +1171,11 @@ impl eframe::App for SpaceViewApp {
         if ui.input(|i| i.key_pressed(egui::Key::Delete))
             && !self.selected.is_empty()
             && !self.is_scanning()
+            && !self.is_deleting()
         {
             self.confirm_delete = true;
         }
-        if self.confirm_delete {
+        if self.confirm_delete && !self.is_deleting() {
             let n = self.selected.len();
             let list = self.selected.clone();
             let mut do_it = false;
