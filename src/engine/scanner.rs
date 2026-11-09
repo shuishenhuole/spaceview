@@ -64,6 +64,84 @@ pub enum ScanEvent {
     Failed(String),
 }
 
+impl ScanResult {
+    /// 一批路径已成功移到回收站后,一次性把内存模型同步到现实:
+    /// 回减目录树大小、剔除 TopN、扣减扩展名统计与总计。
+    ///
+    /// 后台删除期间逐项发事件,UI 只累计进度;结束后调用本方法做一次批量更新。
+    /// 这样避免"每项都线性查找 TopN / 全树路径"造成的 O(n²) 主线程卡顿。
+    pub fn apply_deleted(&mut self, deleted: &[PathBuf]) {
+        use std::collections::HashSet;
+
+        if deleted.is_empty() {
+            return;
+        }
+        let wanted: HashSet<&Path> = deleted.iter().map(|p| p.as_path()).collect();
+
+        // 1) 文件命中:单次遍历 TopN,累计祖先回减与扩展名扣减
+        let mut hit_paths: HashSet<PathBuf> = HashSet::new();
+        let mut ext_delta: HashMap<String, (u64, u64)> = HashMap::new();
+        let mut file_bytes = 0u64;
+        let mut file_count = 0u64;
+        for hit in &self.top_files {
+            if !wanted.contains(hit.path.as_path()) {
+                continue;
+            }
+            self.tree.subtract(hit.dir_idx, hit.size, 1);
+            let ext = hit
+                .path
+                .extension()
+                .map(|e| e.to_string_lossy().to_lowercase())
+                .unwrap_or_else(|| "(无扩展名)".to_string());
+            let entry = ext_delta.entry(ext).or_insert((0, 0));
+            entry.0 += 1;
+            entry.1 += hit.size;
+            file_bytes += hit.size;
+            file_count += 1;
+            hit_paths.insert(hit.path.clone());
+        }
+        for st in &mut self.ext_stats {
+            if let Some(&(count, bytes)) = ext_delta.get(&st.ext) {
+                st.count = st.count.saturating_sub(count);
+                st.bytes = st.bytes.saturating_sub(bytes);
+            }
+        }
+        self.top_files.retain(|h| !hit_paths.contains(&h.path));
+        self.total_bytes = self.total_bytes.saturating_sub(file_bytes);
+        self.total_files = self.total_files.saturating_sub(file_count);
+
+        // 2) 目录删除:剩余路径按路径找节点(一次全树遍历只建所需索引)
+        let dir_paths: Vec<&PathBuf> = deleted
+            .iter()
+            .filter(|p| !hit_paths.contains(*p))
+            .collect();
+        if dir_paths.is_empty() {
+            return;
+        }
+        let dir_wanted: HashSet<&Path> = dir_paths.iter().map(|p| p.as_path()).collect();
+        let mut index: HashMap<PathBuf, u32> = HashMap::new();
+        for i in 0..self.tree.nodes.len() as u32 {
+            let p = self.tree.dir_path(i);
+            if dir_wanted.contains(p.as_path()) {
+                index.insert(p, i);
+            }
+        }
+        for p in dir_paths {
+            if let Some(&idx) = index.get(p.as_path()) {
+                let (size, files) = {
+                    let n = &self.tree.nodes[idx as usize];
+                    (n.size, n.file_count)
+                };
+                self.tree.remove_subtree(idx);
+                self.total_bytes = self.total_bytes.saturating_sub(size);
+                self.total_files = self.total_files.saturating_sub(files);
+                // 被删目录下的文件若还在 TopN,一并剔除
+                self.top_files.retain(|h| !h.path.starts_with(p));
+            }
+        }
+    }
+}
+
 /// 克隆当前树并做自底向上聚合,得到"当前已扫描内容"的完整大小视图。
 /// 扫描主循环中 node.size 只含直属文件,聚合放在克隆上进行,避免拖慢主遍历。
 fn aggregate_snapshot(src: &Tree) -> Tree {
