@@ -2,9 +2,9 @@ name: SpaceView Build & Release
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "main" ]
 
 # 默认只读;创建 Release 的 job 单独提升为 write
 permissions:
@@ -14,7 +14,7 @@ env:
   CARGO_TERM_COLOR: always
   RELEASE_NAME: SpaceView
 
-# PR 上连续推送时取消旧任务;master 上的发布任务不取消
+# PR 上连续推送时取消旧任务;main 上的发布任务不取消
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -100,7 +100,7 @@ jobs:
   release:
     name: Create Release
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
