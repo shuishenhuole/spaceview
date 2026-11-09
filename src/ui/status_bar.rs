@@ -1,6 +1,7 @@
 //! 底部状态栏:扫描进度、完成摘要或失败信息。
 
 use crate::app::AppState;
+use crate::engine::deleter::DeleteJob;
 use crate::engine::tree::human_size;
 use crate::f;
 use crate::i18n::b;
@@ -85,4 +86,61 @@ pub fn show(state: &AppState, progress: &Progress, ui: &mut egui::Ui) {
             );
         }
     }
+}
+
+/// 后台删除进行中的附加状态行:进度、当前项与"取消剩余"。
+/// 返回是否请求取消,由 app.rs 下发给工作线程的取消标志。
+pub fn show_delete_progress(job: &DeleteJob, ui: &mut egui::Ui) -> bool {
+    let mut cancel = false;
+    let label = if job.cancelled() {
+        b("正在取消剩余删除项…", "Cancelling remaining deletes…")
+    } else {
+        b(
+            "正在后台删除到回收站…",
+            "Deleting to Recycle Bin in background…",
+        )
+    };
+    ui.horizontal(|ui| {
+        ui.spinner();
+        ui.label(f!("{} {}/{}", "{} {}/{}", label, job.done, job.total));
+        if let Some(p) = &job.current {
+            // 长路径只显示尾部,避免把状态栏撑开;完整路径放在悬停提示里
+            let full = p.display().to_string();
+            let short = if full.chars().count() > 60 {
+                let tail: String = full
+                    .chars()
+                    .rev()
+                    .take(57)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                format!("…{tail}")
+            } else {
+                full.clone()
+            };
+            ui.label(
+                egui::RichText::new(short)
+                    .small()
+                    .color(ui.visuals().weak_text_color()),
+            )
+            .on_hover_text(full);
+        }
+        if ui
+            .add_enabled(
+                !job.cancelled(),
+                egui::Button::new(b("取消剩余", "Cancel remaining")),
+            )
+            .clicked()
+        {
+            cancel = true;
+        }
+    });
+    let frac = if job.total == 0 {
+        1.0
+    } else {
+        (job.done as f32 / job.total as f32).clamp(0.0, 1.0)
+    };
+    ui.add(egui::ProgressBar::new(frac).desired_width(240.0));
+    cancel
 }
