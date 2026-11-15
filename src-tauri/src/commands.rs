@@ -66,41 +66,63 @@ pub fn start_scan(
     inner.scanning.store(true, Ordering::SeqCst);
 
     let root_path = PathBuf::from(&root);
+
+    // 事件转发线程:扫描线程只把事件投递进通道,serde 序列化与 WebView emit
+    // 全部在这里执行。整棵树的快照 JSON 可达数十 MB,若留在遍历线程里会
+    // 明显拖慢扫描;前端侧另有 500ms 节流,两边都不做高频 IPC。
+    let (tx, rx) = std::sync::mpsc::channel::<scanner::ScanEvent>();
+    let emit_app = app.clone();
+    let emit_inner = Arc::clone(&inner);
     std::thread::spawn(move || {
-        let res = scanner::run_scan(root_path, cancel, paused, |ev| match ev {
-            scanner::ScanEvent::Tick {
-                dirs,
-                files,
-                bytes,
-                cur,
-            } => {
-                let _ = app.emit(
-                    "scan://tick",
-                    dto::ScanTickDto {
-                        dirs,
-                        files,
-                        bytes,
-                        cur,
-                    },
-                );
+        while let Ok(ev) = rx.recv() {
+            match ev {
+                scanner::ScanEvent::Tick {
+                    dirs,
+                    files,
+                    bytes,
+                    cur,
+                } => {
+                    let _ = emit_app.emit(
+                        "scan://tick",
+                        dto::ScanTickDto {
+                            dirs,
+                            files,
+                            bytes,
+                            cur,
+                        },
+                    );
+                }
+                scanner::ScanEvent::Snapshot(snapshot) => {
+                    let _ = emit_app.emit("scan://snapshot", dto::to_dto(&snapshot));
+                }
+                scanner::ScanEvent::Done(result) => {
+                    *emit_inner.result.lock().unwrap() = Some((*result).clone());
+                    // 先落状态再通知前端,避免前端收到 done 后立刻删除被误判"扫描中"
+                    if epoch == emit_inner.epoch.load(Ordering::SeqCst) {
+                        emit_inner.scanning.store(false, Ordering::SeqCst);
+                    }
+                    let _ = emit_app.emit("scan://done", dto::to_dto(&result));
+                    break;
+                }
+                scanner::ScanEvent::Cancelled => {
+                    let _ = emit_app.emit("scan://cancelled", ());
+                    break;
+                }
             }
-            scanner::ScanEvent::Snapshot(snapshot) => {
-                let _ = app.emit("scan://snapshot", dto::to_dto(&snapshot));
-            }
-            scanner::ScanEvent::Done(result) => {
-                *inner.result.lock().unwrap() = Some((*result).clone());
-                let _ = app.emit("scan://done", dto::to_dto(&result));
-            }
-            scanner::ScanEvent::Cancelled => {
-                let _ = app.emit("scan://cancelled", ());
-            }
+        }
+        // 通道关闭(扫描失败/取消)时的兜底清理,只清理本轮标志
+        if epoch == emit_inner.epoch.load(Ordering::SeqCst) {
+            emit_inner.scanning.store(false, Ordering::SeqCst);
+        }
+    });
+
+    // 扫描线程:只做遍历与数据构建,事件投递是一次近乎零成本的 channel send
+    std::thread::spawn(move || {
+        let res = scanner::run_scan(root_path, cancel, paused, |ev| {
+            let _ = tx.send(ev);
         });
         if let Err(e) = res {
             let _ = app.emit("scan://failed", e);
-        }
-        // 只清理本轮标志,避免迟到的旧线程误清新一轮状态
-        if inner.epoch.load(Ordering::SeqCst) == epoch {
-            inner.scanning.store(false, Ordering::SeqCst);
         }
     });
     Ok(())
@@ -222,4 +244,59 @@ pub fn cancel_delete(state: State<'_, ScanState>) {
         .lock()
         .unwrap()
         .store(true, Ordering::Relaxed);
+}
+
+/// 同步 Windows 原生标题栏深/浅色。
+///
+/// Tauri(wry) 的 set_theme 只设置 WebView2 的 preferred color scheme 与 tao
+/// 窗口主题,不会下发 DWMWA_USE_IMMERSIVE_DARK_MODE,标题栏仍保持浅色。
+/// 因此这里在切换主题时显式调用一次 DWM 接口(与旧版 egui 的处理一致)。
+#[tauri::command]
+pub fn set_titlebar_theme(window: tauri::WebviewWindow, dark: bool) {
+    #[cfg(windows)]
+    {
+        // WebView2 的 prefers-color-scheme 也一并同步
+        let _ = window.set_theme(Some(if dark {
+            tauri::Theme::Dark
+        } else {
+            tauri::Theme::Light
+        }));
+        if let Ok(hwnd) = window.hwnd() {
+            set_dwm_dark(hwnd.0 as usize as isize, dark);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (window, dark);
+    }
+}
+
+#[cfg(windows)]
+fn set_dwm_dark(hwnd: isize, dark: bool) {
+    #[link(name = "dwmapi")]
+    unsafe extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: isize,
+            attribute: u32,
+            value: *const u32,
+            size: u32,
+        ) -> i32;
+    }
+    // 20 = Win11 22H2+,19 = Win10 1903+;两个都下发以兼容不同系统
+    const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
+    const DWMWA_USE_IMMERSIVE_DARK_MODE_OLD: u32 = 19;
+    let value: u32 = if dark { 1 } else { 0 };
+    unsafe {
+        for attr in [
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            DWMWA_USE_IMMERSIVE_DARK_MODE_OLD,
+        ] {
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                attr,
+                &value,
+                std::mem::size_of::<u32>() as u32,
+            );
+        }
+    }
 }

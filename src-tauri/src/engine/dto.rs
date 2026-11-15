@@ -1,5 +1,8 @@
 //! 引擎内存结构 → 前端可序列化 DTO 的转换层。
 //! 字段统一为 camelCase,与 `src/types.ts` 一一对应。
+//!
+//! 性能:目录节点(可能数十万个)的 name/children 以借用形式序列化,
+//! 避免每次快照都克隆几十万个小 Vec/String —— 这是大目录扫描时的主要分配开销。
 
 use serde::Serialize;
 
@@ -7,21 +10,21 @@ use super::scanner::ScanResult;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct DirNodeDto {
+pub struct DirNodeDto<'a> {
     pub parent: Option<u32>,
-    pub name: String,
+    pub name: &'a str,
     pub size: u64,
     pub file_count: u64,
-    pub children: Vec<u32>,
+    pub children: &'a [u32],
     pub denied: bool,
     pub deleted: bool,
 }
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct TreeDto {
+pub struct TreeDto<'a> {
     pub root_path: String,
-    pub nodes: Vec<DirNodeDto>,
+    pub nodes: Vec<DirNodeDto<'a>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -42,8 +45,8 @@ pub struct ExtStatDto {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct ScanResultDto {
-    pub tree: TreeDto,
+pub struct ScanResultDto<'a> {
+    pub tree: TreeDto<'a>,
     pub top_files: Vec<FileHitDto>,
     pub ext_stats: Vec<ExtStatDto>,
     pub denied: Vec<String>,
@@ -91,7 +94,7 @@ fn path_str(p: &std::path::Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
-pub fn to_dto(r: &ScanResult) -> ScanResultDto {
+pub fn to_dto(r: &ScanResult) -> ScanResultDto<'_> {
     ScanResultDto {
         tree: TreeDto {
             root_path: path_str(&r.tree.root_path),
@@ -101,10 +104,10 @@ pub fn to_dto(r: &ScanResult) -> ScanResultDto {
                 .iter()
                 .map(|n| DirNodeDto {
                     parent: n.parent,
-                    name: n.name.clone(),
+                    name: n.name.as_str(),
                     size: n.size,
                     file_count: n.file_count,
-                    children: n.children.clone(),
+                    children: n.children.as_slice(),
                     denied: n.denied,
                     deleted: n.deleted,
                 })

@@ -91,7 +91,9 @@ fn background_delete_reports_events() {
             errors += 1;
         }
     });
-    assert_eq!(started, vec![p1, p2]);
+    // 并行工作线程下事件顺序不固定,只校验集合与计数
+    assert_eq!(started.len(), 2);
+    assert!(started.contains(&p1) && started.contains(&p2));
     assert_eq!(errors, 2);
     assert_eq!(summary.total, 2);
     assert_eq!(summary.done, 2);

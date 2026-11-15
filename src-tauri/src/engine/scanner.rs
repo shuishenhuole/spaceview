@@ -24,6 +24,11 @@ use crate::engine::tree::{DirNode, Tree, ROOT};
 
 pub const TOP_N_LIMIT: usize = 10_000;
 const DENIED_SAMPLES: usize = 200;
+/// 前端交互节流:进度每 500ms 推一次(原 200ms 过于频繁,IPC 会拖慢遍历)。
+const TICK_INTERVAL: Duration = Duration::from_millis(500);
+/// 部分快照更重(整棵树的克隆 + 聚合 + 序列化),保持 1s 一次;
+/// 与 500ms 的进度 tick 共用同一个调度点,避免额外计时器检查。
+const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(1000);
 
 /// 一个大文件命中记录
 #[derive(Clone)]
@@ -381,7 +386,9 @@ fn run<F: FnMut(ScanEvent)>(
                 }
             }
         }
-        if last_tick.elapsed() > Duration::from_millis(200) {
+        // 统一 500ms 调度点:每 500ms 推一次进度;每 1s 顺便带一次部分快照。
+        // 快照要克隆整棵树并序列化成 JSON,频率过高会反噬扫描速度,故不放宽到 500ms。
+        if last_tick.elapsed() >= TICK_INTERVAL {
             last_tick = Instant::now();
             emit(ScanEvent::Tick {
                 dirs,
@@ -389,13 +396,12 @@ fn run<F: FnMut(ScanEvent)>(
                 bytes,
                 cur: cur.clone(),
             });
-        }
-        // 每秒推送一次部分快照,让 UI 在扫描过程中即可展示已扫描内容
-        if last_snap.elapsed() > Duration::from_secs(1) {
-            last_snap = Instant::now();
-            emit(ScanEvent::Snapshot(Box::new(build_partial(
-                &tree, &top, &exts, &node_map, &denied, files, bytes,
-            ))));
+            if last_snap.elapsed() >= SNAPSHOT_INTERVAL {
+                last_snap = Instant::now();
+                emit(ScanEvent::Snapshot(Box::new(build_partial(
+                    &tree, &top, &exts, &node_map, &denied, files, bytes,
+                ))));
+            }
         }
     }
 
