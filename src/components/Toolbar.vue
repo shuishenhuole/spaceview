@@ -5,7 +5,6 @@ import { computed } from "vue";
 import {
   ActivityIcon,
   FolderOpenIcon,
-  HardDriveIcon,
   LanguagesIcon,
   LoaderCircleIcon,
   MoonIcon,
@@ -30,6 +29,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { currentLang, t } from "@/i18n";
+import logoUrl from "@/assets/logo.png";
 import type { AppPhase } from "@/types";
 
 const props = defineProps<{
@@ -60,9 +60,9 @@ const busy = computed(() => props.phase === "scanning" || props.deleting);
 </script>
 
 <template>
-  <header class="panel mx-3 mt-3 flex shrink-0 items-center gap-2 px-3 py-2">
-    <div class="brand-mark">
-      <HardDriveIcon class="size-4" />
+  <header class="panel app-toolbar mx-3 mt-3 flex shrink-0 items-center gap-2 px-3 py-2">
+    <div class="brand-logo">
+      <img :src="logoUrl" alt="SpaceView" class="size-full" />
     </div>
     <div class="mr-1 hidden flex-col leading-tight sm:flex">
       <span class="text-sm font-semibold tracking-tight">SpaceView</span>

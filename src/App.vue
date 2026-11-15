@@ -6,15 +6,17 @@
  *  - 子组件只负责渲染并上报动作,行为统一在此执行;
  *  - Rust 侧通过 scan://* / delete://* 事件推送进度与结果,这里只消费不阻塞;
  *  - 偏好(主题/语言/动效)用 localStorage 持久化,替代旧版 eframe Storage。 */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { LoaderCircleIcon, ScanSearchIcon } from "@lucide/vue";
+import { gsap } from "gsap";
+import { LoaderCircleIcon } from "@lucide/vue";
 
 import { api, bindScanEvents } from "@/api";
+import logoUrl from "@/assets/logo.png";
+import { enterPanel, enterStagger, flashTheme } from "@/lib/motion";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { currentLang, t, toggleLang } from "@/i18n";
@@ -68,7 +70,8 @@ const progress = ref<ProgressData>({
 });
 const paused = ref(false);
 
-const tab = ref<TabKey>("files");
+/** 默认直接展示 Treemap(扫描中也能实时看到空间分布) */
+const tab = ref<TabKey>("treemap");
 const sortBy = ref<SortBy>("size");
 const drill = ref<number[]>([ROOT]);
 const selected = ref<string[]>([]);
@@ -84,18 +87,20 @@ const epoch = ref(0);
 // ---------- 偏好(持久化) ----------
 const dark = ref(localStorage.getItem("spaceview.theme") !== "light");
 const reduceMotion = ref(localStorage.getItem("spaceview.motion") === "reduced");
+/** 根容器引用:GSAP context 的作用域,卸载时统一 revert */
+const shellRef = ref<HTMLElement | null>(null);
 
 watch(
   dark,
   (v) => {
     document.documentElement.classList.toggle("dark", v);
     localStorage.setItem("spaceview.theme", v ? "dark" : "light");
-    // 同步原生标题栏主题;权限缺失时静默忽略,不影响界面主题
-    try {
-      void Promise.resolve(getCurrentWindow().setTheme(v ? "dark" : "light")).catch(() => {});
-    } catch {
-      /* noop */
-    }
+    // 同步 Windows 原生标题栏(DWM 沉浸深色)与 WebView2 的 prefers-color-scheme
+    void api.setTitlebarTheme(v).catch((e) =>
+      console.warn("[SpaceView] set_titlebar_theme:", e),
+    );
+    // 切换瞬间给界面一个极轻的亮度反馈(减少动画时自动跳过)
+    if (shellRef.value) flashTheme(shellRef.value);
   },
   { immediate: true },
 );
@@ -338,7 +343,12 @@ function cancelDelete(): void {
 async function handleRowAction(action: RowAction): Promise<void> {
   if (action.type === "copy") {
     try {
-      await writeText(action.path);
+      // 优先走 Tauri 剪贴板插件;权限异常时回退到 WebView 的 Clipboard API
+      try {
+        await writeText(action.path);
+      } catch {
+        await navigator.clipboard.writeText(action.path);
+      }
       setMessage(t("toast.copied", action.path));
     } catch (e) {
       setMessage(String(e));
@@ -447,6 +457,29 @@ function onKeydown(e: KeyboardEvent): void {
   }
 }
 
+// ---------- 动效 ----------
+let animContext: ReturnType<typeof gsap.context> | null = null;
+
+/** 结果从"无"到"有"的瞬间:左右面板依次淡入上移 */
+watch(result, async (next, prev) => {
+  if (!next || prev) return;
+  await nextTick();
+  enterPanel(shellRef.value?.querySelectorAll("[data-result-panel]") ?? null, {
+    stagger: 0.09,
+    y: 16,
+    duration: 0.45,
+  });
+});
+
+/** Tab 切换:内容区淡入 */
+watch(tab, async () => {
+  await nextTick();
+  enterPanel(shellRef.value?.querySelector("[data-tab-panel]") ?? null, {
+    y: 8,
+    duration: 0.3,
+  });
+});
+
 // ---------- 生命周期 ----------
 let unlisteners: UnlistenFn[] = [];
 
@@ -461,19 +494,33 @@ onMounted(async () => {
   driveValue.value = String(idx >= 0 ? idx : 0);
   unlisteners = await bindScanEvents(handlers);
   window.addEventListener("keydown", onKeydown);
+  // 窗口完全就绪后再下发一次,确保 DWM 属性在标题栏可见后生效
+  void api.setTitlebarTheme(dark.value).catch(() => {});
+
+  // 首屏:工具栏 / 主面板 / 状态栏依次入场
+  await nextTick();
+  animContext = gsap.context(() => {
+    enterStagger(shellRef.value?.querySelectorAll("[data-enter]") ?? null, {
+      stagger: 0.09,
+      y: 16,
+      duration: 0.55,
+    });
+  }, shellRef.value ?? undefined);
 });
 
 onBeforeUnmount(() => {
   for (const off of unlisteners) off();
   window.removeEventListener("keydown", onKeydown);
   if (toastTimer !== undefined) window.clearTimeout(toastTimer);
+  animContext?.revert();
 });
 </script>
 
 <template>
   <TooltipProvider :delay-duration="350">
-    <div class="app-shell" :class="{ 'reduce-motion': reduceMotion }">
+    <div ref="shellRef" class="app-shell" :class="{ 'reduce-motion': reduceMotion }">
       <Toolbar
+        data-enter
         :drives="drives"
         :drive-value="driveValue"
         :custom-path="customPath"
@@ -495,6 +542,7 @@ onBeforeUnmount(() => {
 
       <FilterBar
         v-if="result"
+        data-enter
         class="mx-3 mt-2"
         :filter-text="filterText"
         :min-bytes="minBytes"
@@ -504,7 +552,11 @@ onBeforeUnmount(() => {
 
       <div class="mx-3 mt-2 mb-2 flex min-h-0 flex-1 gap-3">
         <!-- 左侧:目录树(有结果时显示,单击联动 Treemap) -->
-        <aside v-if="result" class="panel flex w-[330px] shrink-0 flex-col overflow-hidden">
+        <aside
+          v-if="result"
+          data-result-panel
+          class="panel flex w-[330px] shrink-0 flex-col overflow-hidden"
+        >
           <DirectoryTree
             :tree="result.tree"
             :needle="filterText"
@@ -515,14 +567,16 @@ onBeforeUnmount(() => {
         </aside>
 
         <!-- 中央:三大视图 -->
-        <main class="panel flex min-w-0 flex-1 flex-col overflow-hidden">
+        <main
+          data-enter
+          data-result-panel
+          class="panel flex min-w-0 flex-1 flex-col overflow-hidden"
+        >
           <div
             v-if="!result"
             class="flex flex-1 flex-col items-center justify-center gap-3 text-center"
           >
-            <div class="brand-mark !size-12 !rounded-2xl">
-              <ScanSearchIcon class="!size-6" />
-            </div>
+            <img :src="logoUrl" alt="SpaceView" class="size-16 rounded-2xl shadow-lg" />
             <h2 class="text-lg font-semibold tracking-tight">SpaceView</h2>
             <p class="max-w-sm text-sm text-muted-foreground">
               {{ phase === "scanning" ? t("scanning.wait") : t("idle.hint") }}
@@ -548,7 +602,7 @@ onBeforeUnmount(() => {
               </TabsList>
             </div>
 
-            <TabsContent value="files" class="mt-2 min-h-0 flex-1">
+            <TabsContent value="files" data-tab-panel class="mt-2 min-h-0 flex-1">
               <TopFiles
                 :rows="visibleFiles"
                 :matched="matchedCount"
@@ -564,11 +618,11 @@ onBeforeUnmount(() => {
               />
             </TabsContent>
 
-            <TabsContent value="extensions" class="mt-2 min-h-0 flex-1">
+            <TabsContent value="extensions" data-tab-panel class="mt-2 min-h-0 flex-1">
               <ExtensionStats :result="result" />
             </TabsContent>
 
-            <TabsContent value="treemap" class="mt-2 min-h-0 flex-1">
+            <TabsContent value="treemap" data-tab-panel class="mt-2 min-h-0 flex-1">
               <TreemapView
                 :tree="result.tree"
                 :drill="drill"
@@ -584,6 +638,7 @@ onBeforeUnmount(() => {
       </div>
 
       <StatusBar
+        data-enter
         class="mx-3 mb-3"
         :phase="phase"
         :paused="paused"

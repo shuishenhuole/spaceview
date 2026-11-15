@@ -20,6 +20,7 @@ body {
   text-rendering: optimizeLegibility;
   background: var(--background);
   color: var(--foreground);
+  transition: background-color 0.35s ease, color 0.35s ease;
 }
 
 #app {
@@ -38,6 +39,14 @@ body {
     radial-gradient(1100px 460px at 8% -14%, var(--brand-glow), transparent 72%),
     radial-gradient(760px 380px at 100% 0%, var(--brand-glow), transparent 76%),
     var(--background);
+  transition: background-color 0.35s ease;
+}
+
+// 深色下把光晕压到很淡,避免顶部工具栏被蓝色冲淡、看起来"不够黑"
+.dark .app-shell {
+  background:
+    radial-gradient(1100px 460px at 8% -14%, color-mix(in oklch, var(--brand-glow) 28%, transparent), transparent 70%),
+    var(--background);
 }
 
 // 面板:轻微玻璃感 + 柔和阴影
@@ -52,17 +61,27 @@ body {
   }
 }
 
-// 品牌标记
-.brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+// 顶部工具栏:深色模式用接近纯黑的底色,与系统标题栏观感一致
+.app-toolbar {
+  .dark & {
+    background: oklch(0.145 0.008 260);
+    border-color: oklch(1 0 0 / 8%);
+  }
+}
+
+// 品牌 Logo(与应用图标同源)
+.brand-logo {
   width: 1.75rem;
   height: 1.75rem;
+  flex-shrink: 0;
+  overflow: hidden;
   border-radius: 0.55rem;
-  background: linear-gradient(135deg, var(--brand), color-mix(in oklch, var(--brand) 55%, white));
-  color: white;
-  box-shadow: 0 4px 12px -4px var(--brand);
+  box-shadow: 0 3px 10px -4px rgb(0 0 0 / 40%);
+
+  img {
+    display: block;
+    object-fit: cover;
+  }
 }
 
 // 统一细滚动条
@@ -121,15 +140,14 @@ body {
   cursor: pointer;
   outline: 1px solid color-mix(in oklch, var(--card) 70%, transparent);
   outline-offset: -1px;
+  // 位置/尺寸形变交给 CSS;淡入与错峰入场交给 GSAP(motion.ts)
   transition:
     left @anim @ease-out,
     top @anim @ease-out,
     width @anim @ease-out,
     height @anim @ease-out,
-    opacity 0.26s ease,
     filter 0.18s ease,
     box-shadow 0.18s ease;
-  animation: tm-enter 0.36s @ease-out both;
 
   &:hover {
     filter: brightness(1.07) saturate(1.05);
@@ -142,17 +160,6 @@ body {
   }
   &.is-static {
     cursor: default;
-  }
-}
-
-@keyframes tm-enter {
-  from {
-    opacity: 0;
-    transform: scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
   }
 }
 
@@ -174,29 +181,12 @@ body {
   word-break: break-all;
 }
 
-// Toast
-.toast-box {
-  animation: toast-in 0.28s @ease-out both;
-}
-
-@keyframes toast-in {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-// 减少动画:统一关闭布局位移与入场动画,只保留状态反馈
+// 减少动画:关闭 CSS 位移与入场动画;GSAP 动效由 motion.ts 的
+// motionEnabled() 统一跳过,这里再兜底把残留 CSS 动画即时化。
 .reduce-motion {
   .treemap-block,
-  .toast-box,
   .selectable-row {
     transition: none !important;
-    animation: none !important;
   }
   *,
   *::before,

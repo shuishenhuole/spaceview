@@ -17,6 +17,8 @@ export const api = {
   setPaused: (paused: boolean) => invoke<void>("set_paused", { paused }),
   deletePaths: (paths: string[]) => invoke<void>("delete_paths", { paths }),
   cancelDelete: () => invoke<void>("cancel_delete"),
+  /** 同步 Windows 原生标题栏深/浅色(DWM 沉浸深色属性) */
+  setTitlebarTheme: (dark: boolean) => invoke<void>("set_titlebar_theme", { dark }),
 };
 
 export interface ScanEventHandlers {

@@ -2,12 +2,14 @@
 /** Treemap 视图:把当前目录的子目录 + 直属文件按 squarify 布局成矩形块。
  *  左键下钻、面包屑返回、悬停显示占比详情、右键菜单复用 RowContextMenu。
  *  块位置用 CSS transition 补间,扫描快照刷新时自然形变(对齐旧版动画)。 */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ArrowLeftIcon } from "@lucide/vue";
+import { gsap } from "gsap";
 
 import { Button } from "@/components/ui/button";
 import { t } from "@/i18n";
 import { dirPath, fitWidth, formatNumber, humanSize } from "@/lib/format";
+import { enterBlocks } from "@/lib/motion";
 import {
   blockColor,
   blockTextColor,
@@ -37,19 +39,45 @@ const emit = defineEmits<{
 const canvas = ref<HTMLElement | null>(null);
 const size = ref({ w: 0, h: 0 });
 let observer: ResizeObserver | null = null;
+let blockTween: ReturnType<typeof gsap.fromTo> | null = null;
+
+/** 新扫描会话或下钻切换时,色块按面积顺序错峰淡入;
+ *  扫描中的每秒快照只靠 CSS 位置补间,不重放入场,避免闪烁。 */
+function playBlocksEnter(): void {
+  blockTween?.kill();
+  blockTween = enterBlocks(canvas.value?.querySelectorAll(".treemap-block") ?? null);
+}
 
 onMounted(() => {
   if (!canvas.value) return;
-  observer = new ResizeObserver((entries) => {
+  observer = new ResizeObserver(async (entries) => {
     const box = entries[0]?.contentRect;
-    if (box) size.value = { w: box.width, h: box.height };
+    if (!box) return;
+    const first = size.value.w === 0;
+    size.value = { w: box.width, h: box.height };
+    if (first) {
+      await nextTick();
+      playBlocksEnter();
+    }
   });
   observer.observe(canvas.value);
 });
-onBeforeUnmount(() => observer?.disconnect());
+
+onBeforeUnmount(() => {
+  observer?.disconnect();
+  blockTween?.kill();
+});
 
 const current = computed(() => props.drill[props.drill.length - 1] ?? 0);
 const blockSet = computed(() => collectBlocks(props.tree, current.value));
+
+watch(
+  () => [props.epoch, current.value],
+  async () => {
+    await nextTick();
+    playBlocksEnter();
+  },
+);
 
 /** squarify 返回 [blockIndex, size, rect],按权重降序,需按索引回查块 */
 const laid = computed(() =>

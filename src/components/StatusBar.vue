@@ -30,9 +30,10 @@ const emit = defineEmits<{
 const now = ref(performance.now());
 let timer: number | undefined;
 onMounted(() => {
+  // 与后端 500ms 的进度节流对齐,避免前端无意义地高频重绘
   timer = window.setInterval(() => {
     now.value = performance.now();
-  }, 200);
+  }, 500);
 });
 onBeforeUnmount(() => {
   if (timer !== undefined) window.clearInterval(timer);
