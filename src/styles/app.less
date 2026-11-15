@@ -1,0 +1,208 @@
+// ============================================================
+// 全局样式(Less):布局骨架、质感、滚动条、动画。
+// 布局与工具类优先用 Tailwind,这里只放 Tailwind 不便表达的全局/复杂样式。
+// ============================================================
+
+@ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+@anim: 0.42s;
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+}
+
+// 应用外壳:左上角一抹品牌光晕,让深色/浅色都更有层次
+.app-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+  background:
+    radial-gradient(1100px 460px at 8% -14%, var(--brand-glow), transparent 72%),
+    radial-gradient(760px 380px at 100% 0%, var(--brand-glow), transparent 76%),
+    var(--background);
+}
+
+// 面板:轻微玻璃感 + 柔和阴影
+.panel {
+  background: color-mix(in oklch, var(--card) 94%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 0.875rem;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%), 0 10px 28px -18px rgb(0 0 0 / 16%);
+
+  .dark & {
+    box-shadow: 0 1px 2px rgb(0 0 0 / 28%), 0 16px 36px -20px rgb(0 0 0 / 65%);
+  }
+}
+
+// 品牌标记
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.55rem;
+  background: linear-gradient(135deg, var(--brand), color-mix(in oklch, var(--brand) 55%, white));
+  color: white;
+  box-shadow: 0 4px 12px -4px var(--brand);
+}
+
+// 统一细滚动条
+.custom-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--muted-foreground) 35%, transparent) transparent;
+
+  &::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--muted-foreground) 32%, transparent);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+
+    &:hover {
+      background: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
+      background-clip: padding-box;
+    }
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+// 数字用等宽字体,扫描统计更整齐
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+// 文件行 / 目录行
+.selectable-row {
+  transition: background-color 0.14s ease, box-shadow 0.14s ease;
+
+  &:hover {
+    background: color-mix(in oklch, var(--accent) 55%, transparent);
+  }
+}
+
+// Treemap 色块:绝对定位 + 位置/尺寸补间(下钻与实时快照刷新时的形变动画)
+.treemap-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.treemap-block {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  outline: 1px solid color-mix(in oklch, var(--card) 70%, transparent);
+  outline-offset: -1px;
+  transition:
+    left @anim @ease-out,
+    top @anim @ease-out,
+    width @anim @ease-out,
+    height @anim @ease-out,
+    opacity 0.26s ease,
+    filter 0.18s ease,
+    box-shadow 0.18s ease;
+  animation: tm-enter 0.36s @ease-out both;
+
+  &:hover {
+    filter: brightness(1.07) saturate(1.05);
+    box-shadow: inset 0 0 0 2px color-mix(in oklch, var(--foreground) 65%, transparent);
+    z-index: 3;
+  }
+
+  &.is-deleted {
+    outline: 1.5px dashed oklch(0.62 0.19 25);
+  }
+  &.is-static {
+    cursor: default;
+  }
+}
+
+@keyframes tm-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+// 悬浮提示气泡(Treemap)
+.tm-tooltip {
+  position: fixed;
+  z-index: 60;
+  max-width: 340px;
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.6rem;
+  border: 1px solid var(--border);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 12px 30px -12px rgb(0 0 0 / 45%);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  pointer-events: none;
+  white-space: pre-line;
+  word-break: break-all;
+}
+
+// Toast
+.toast-box {
+  animation: toast-in 0.28s @ease-out both;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+// 减少动画:统一关闭布局位移与入场动画,只保留状态反馈
+.reduce-motion {
+  .treemap-block,
+  .toast-box,
+  .selectable-row {
+    transition: none !important;
+    animation: none !important;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}

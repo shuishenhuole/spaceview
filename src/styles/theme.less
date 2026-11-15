@@ -1,0 +1,92 @@
+// ============================================================
+// SpaceView 主题 tokens —— 由 Less 预处理后输出为 CSS 自定义属性,
+// 再经 src/style.css 的 `@theme inline` 映射成 Tailwind 工具类。
+// ============================================================
+
+// Less 层变量:品牌色与两套主题的主色
+@brand-light: oklch(0.56 0.19 264);
+@brand-dark: oklch(0.74 0.15 264);
+@brand-fg: oklch(0.99 0 0);
+
+// 浅色
+:root {
+  --radius: 0.75rem;
+
+  --background: oklch(0.982 0.003 260);
+  --foreground: oklch(0.21 0.012 260);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.012 260);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.012 260);
+  --primary: @brand-light;
+  --primary-foreground: @brand-fg;
+  --secondary: oklch(0.965 0.006 260);
+  --secondary-foreground: oklch(0.25 0.012 260);
+  --muted: oklch(0.965 0.006 260);
+  --muted-foreground: oklch(0.55 0.012 260);
+  --accent: oklch(0.94 0.025 264);
+  --accent-foreground: oklch(0.28 0.08 264);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.918 0.006 260);
+  --input: oklch(0.918 0.006 260);
+  --ring: @brand-light;
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.985 0.003 260);
+  --sidebar-foreground: oklch(0.21 0.012 260);
+  --sidebar-primary: @brand-light;
+  --sidebar-primary-foreground: @brand-fg;
+  --sidebar-accent: oklch(0.94 0.025 264);
+  --sidebar-accent-foreground: oklch(0.28 0.08 264);
+  --sidebar-border: oklch(0.918 0.006 260);
+  --sidebar-ring: @brand-light;
+
+  // 应用自定义:品牌与光晕
+  --brand: @brand-light;
+  --brand-soft: oklch(0.94 0.035 264);
+  --brand-glow: oklch(0.86 0.08 264 / 0.28);
+  --tm-text: oklch(0.2 0.01 260);
+}
+
+// 深色
+.dark {
+  --background: oklch(0.175 0.012 260);
+  --foreground: oklch(0.965 0.003 260);
+  --card: oklch(0.215 0.014 260);
+  --card-foreground: oklch(0.965 0.003 260);
+  --popover: oklch(0.235 0.016 260);
+  --popover-foreground: oklch(0.965 0.003 260);
+  --primary: @brand-dark;
+  --primary-foreground: oklch(0.18 0.03 264);
+  --secondary: oklch(0.275 0.016 260);
+  --secondary-foreground: oklch(0.965 0.003 260);
+  --muted: oklch(0.275 0.016 260);
+  --muted-foreground: oklch(0.708 0.012 260);
+  --accent: oklch(0.31 0.045 264);
+  --accent-foreground: oklch(0.97 0.01 264);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: @brand-dark;
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0.014 260);
+  --sidebar-foreground: oklch(0.965 0.003 260);
+  --sidebar-primary: @brand-dark;
+  --sidebar-primary-foreground: oklch(0.18 0.03 264);
+  --sidebar-accent: oklch(0.31 0.045 264);
+  --sidebar-accent-foreground: oklch(0.97 0.01 264);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: @brand-dark;
+
+  --brand: @brand-dark;
+  --brand-soft: oklch(0.29 0.055 264);
+  --brand-glow: oklch(0.46 0.13 264 / 0.22);
+  --tm-text: oklch(0.98 0 0);
+}
