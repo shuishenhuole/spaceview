@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicBool;
 use spaceview_lib::engine::deleter::{self, DeleteEvent};
 use spaceview_lib::engine::scanner::{self, ExtStat, FileHit, ScanEvent, ScanResult};
 use spaceview_lib::engine::tree::{self, DirNode};
+use spaceview_lib::engine::uninstall;
 
 fn flags() -> (Arc<AtomicBool>, Arc<AtomicBool>) {
     (
@@ -244,3 +245,50 @@ fn remove_subtree_keeps_tombstone() {
     assert_eq!(t.nodes[tree::ROOT as usize].size, 0);
     assert_eq!(t.nodes[tree::ROOT as usize].file_count, 0);
 }
+
+// ---------- 卸载命令行解析(修复路径前多出反斜杠、找不到文件的问题) ----------
+
+#[test]
+fn uninstall_quoted_path_with_args() {
+    // 常见写法:程序路径带引号 + 静默安装参数
+    let (program, args) = uninstall::split_command(
+        r#""C:\Program Files\Concat\unins000.exe" /SILENT /NORESTART"#,
+    );
+    assert_eq!(program, r"C:\Program Files\Concat\unins000.exe");
+    assert_eq!(args, vec!["/SILENT", "/NORESTART"]);
+}
+
+#[test]
+fn uninstall_bare_program_with_args() {
+    // 裸程序名(msiexec 等),不在当前目录也照样解析
+    let (program, args) = uninstall::split_command("MsiExec.exe /X{1234-5678}");
+    assert_eq!(program, "MsiExec.exe");
+    assert_eq!(args, vec!["/X{1234-5678}"]);
+}
+
+#[test]
+fn uninstall_unquoted_path_with_spaces() {
+    // 无引号但路径含空格:识别真实存在的文件路径作为程序(用临时文件模拟)
+    let dir = std::env::temp_dir().join(format!("spaceview_uni_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let exe = dir.join("unins000.exe");
+    fs::write(&exe, b"stub").unwrap();
+
+    let raw = format!("{} /S", exe.display());
+    let (program, args) = uninstall::split_command(&raw);
+    assert_eq!(PathBuf::from(&program), exe);
+    assert_eq!(args, vec!["/S"]);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn uninstall_directory_only_command() {
+    // 个别软件把"安装目录"直接登记为卸载项,解析后应原样得到该目录
+    let (program, args) =
+        uninstall::split_command(r#""C:\Users\me\AppData\Local\Programs\DLSS""#);
+    assert_eq!(program, r"C:\Users\me\AppData\Local\Programs\DLSS");
+    assert!(args.is_empty());
+}
+

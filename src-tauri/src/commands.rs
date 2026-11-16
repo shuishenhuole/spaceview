@@ -9,7 +9,7 @@ use std::process::Command;
 
 use tauri::{AppHandle, Emitter, State};
 
-use crate::engine::{deleter, dto, junk, scanner};
+use crate::engine::{deleter, dto, junk, scanner, uninstall};
 use crate::state::ScanState;
 
 /// 枚举可扫描的顶层存储位置(Windows 盘符 / POSIX 挂载点)
@@ -378,13 +378,42 @@ pub fn launch_uninstaller(uninstall_command: String) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
-        // start 的空标题参数后必须保留注册表中的可执行文件引号,否则含空格路径会被拆开。
-        // 例如: start "" "C:\\Program Files\\Vendor\\unins000.exe" /S
-        Command::new("cmd")
-            .args(["/D", "/C", "start", "", cmd])
-            .spawn()
+        // 自行解析命令行后直接 spawn:若交给 `cmd /C start "<原串>"`,
+        // Rust 会把内嵌引号转义成 \" ,cmd 不认这种转义,路径会被解析成
+        // `\C:\Program Files\...\unins000.exe\`,Windows 报找不到文件。
+        let (program, args) = uninstall::split_command(cmd);
+        if program.is_empty() {
+            return Err("卸载命令为空".into());
+        }
+        let path = std::path::Path::new(&program);
+
+        // 个别软件把"安装目录"登记为卸载项:直接打开目录让用户自行处理
+        if path.is_dir() {
+            return Command::new("explorer")
+                .arg(&program)
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| format!("打开安装目录失败:{e}"));
+        }
+        if !path.exists() {
+            return Err(format!("卸载程序不存在:{program}"));
+        }
+
+        // .bat/.cmd 必须经 cmd 执行:用 raw_arg 传原始命令串,保留注册表里的引号
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let spawned = if ext == "bat" || ext == "cmd" {
+            use std::os::windows::process::CommandExt;
+            Command::new("cmd").arg("/C").raw_arg(cmd).spawn()
+        } else {
+            Command::new(&program).args(&args).spawn()
+        };
+        spawned
             .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(|e| format!("启动卸载程序失败:{e}"))
     }
     #[cfg(not(windows))]
     {
