@@ -11,7 +11,7 @@ import Toast from "@/components/Toast.vue";
 import { currentLang } from "@/i18n";
 import { dark, reduceMotion } from "@/composables/usePreferences";
 import { toast } from "@/composables/useToast";
-import { flashTheme } from "@/lib/motion";
+import { flashTheme, pageEnter, pageLeave } from "@/lib/motion";
 
 /** 全局自定义右键菜单的位置;null 表示关闭 */
 const menu = ref<{ x: number; y: number } | null>(null);
@@ -85,7 +85,12 @@ onBeforeUnmount(() => {
       :class="{ 'reduce-motion': reduceMotion }"
       @contextmenu="onContextMenu"
     >
-      <RouterView />
+      <!-- 页面切换统一动效:淡出旧页 → 淡入上移新页(减少动画偏好时自动跳过) -->
+      <RouterView v-slot="{ Component }">
+        <Transition mode="out-in" :css="false" @enter="pageEnter" @leave="pageLeave">
+          <component :is="Component" />
+        </Transition>
+      </RouterView>
       <Toast :message="toast?.text ?? null" />
       <GlobalContextMenu :state="menu" @close="closeMenu" />
     </div>

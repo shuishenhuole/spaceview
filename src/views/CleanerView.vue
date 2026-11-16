@@ -21,6 +21,7 @@ import logoUrl from "@/assets/logo.png";
 import AppNav from "@/components/AppNav.vue";
 import ScanLoading from "@/components/ScanLoading.vue";
 import { t } from "@/i18n";
+import { pageEnter, pageLeave } from "@/lib/motion";
 import { setMessage } from "@/composables/useToast";
 import { fileName, humanSize, parentDir } from "@/lib/format";
 import type { JunkItem, JunkRoot, RowAction, InstalledApp } from "@/types";
@@ -317,7 +318,9 @@ async function handleRowAction(action: RowAction): Promise<void> {
       </div>
     </header>
 
-    <main v-if="page === 'junk'" class="mx-3 mt-2 mb-2 flex min-h-0 flex-1 gap-3 overflow-hidden">
+    <!-- 页签切换与路由切换共用同一套 pageEnter / pageLeave 动效 -->
+    <Transition mode="out-in" :css="false" @enter="pageEnter" @leave="pageLeave">
+      <main v-if="page === 'junk'" key="junk" class="mx-3 mt-2 mb-2 flex min-h-0 flex-1 gap-3 overflow-hidden">
       <!-- 左侧:扫描位置 -->
       <aside class="panel flex w-[360px] shrink-0 flex-col overflow-hidden">
         <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
@@ -515,7 +518,7 @@ async function handleRowAction(action: RowAction): Promise<void> {
       </main>
     </main>
 
-    <main v-else class="mx-3 mt-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+    <main v-else key="software" class="mx-3 mt-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
       <section class="panel flex min-h-0 flex-1 flex-col overflow-hidden">
         <header class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
           <PackageOpenIcon class="size-4 text-brand" />
@@ -578,6 +581,7 @@ async function handleRowAction(action: RowAction): Promise<void> {
         </div>
       </section>
     </main>
+    </Transition>
 
     <ConfirmDelete
       :open="confirmOpen"
