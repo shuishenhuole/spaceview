@@ -415,27 +415,29 @@ async function handleRowAction(action: RowAction): Promise<void> {
           <span class="text-right">{{ t("cleaner.colSize") }}</span>
         </div>
 
-        <div class="custom-scroll min-h-0 flex-1 overflow-auto px-2 py-2">
-          <template v-if="visibleItems.length === 0">
-            <ScanLoading
-              v-if="scanning"
-              class="px-3"
-              compact
-              :title="t('cleaner.scanning')"
-              :files="scanned"
-            />
-            <p v-else-if="items.length === 0" class="px-3 py-8 text-center text-xs text-muted-foreground">
-              {{ t("cleaner.empty") }}
-            </p>
-            <p
-              v-else
-              class="px-3 py-2 text-center text-xs text-muted-foreground"
-            >
-              已显示前 {RENDER_LIMIT} 项,过滤后剩余
-              {filteredItems.length - RENDER_LIMIT} 项
-            </p>
-          </template>
+        <!-- 空状态(扫描中 / 无结果):在整块面板内水平垂直居中 -->
+        <div
+          v-if="visibleItems.length === 0"
+          class="flex min-h-0 flex-1 flex-col items-center justify-center px-3 py-8"
+        >
+          <ScanLoading
+            v-if="scanning"
+            compact
+            :title="t('cleaner.scanning')"
+            :files="scanned"
+          />
+          <p v-else-if="filteredItems.length === 0 && items.length > 0" class="text-center text-xs text-muted-foreground">
+            {{ t("cleaner.filterEmpty") }}
+          </p>
+          <p v-else-if="items.length === 0" class="text-center text-xs text-muted-foreground">
+            {{ t("cleaner.empty") }}
+          </p>
+          <p v-else class="text-center text-xs text-muted-foreground">
+            {{ t("cleaner.limitHint", RENDER_LIMIT) }}
+          </p>
+        </div>
 
+        <div v-else class="custom-scroll min-h-0 flex-1 overflow-auto px-2 py-2">
           <RowContextMenu
             v-for="(it, _i) in visibleItems"
             :key="it.path"
