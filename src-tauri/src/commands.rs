@@ -53,7 +53,17 @@ pub fn start_scan(
         return Err("删除正在后台进行,请等待完成或取消后再扫描".into());
     }
     if inner.scanning.load(Ordering::SeqCst) {
-        return Err("扫描正在进行中".into());
+        // 典型场景:前端在扫描中切换路由,已主动取消但旧线程退出是协作式的,
+        // 需要几毫秒感知。这里先补一发取消信号并短暂等待,等不到才报错,
+        // 让"切走再切回来立刻重新扫描"无缝衔接,而不是弹"扫描正在进行中"。
+        inner.cancel.lock().unwrap().store(true, Ordering::Relaxed);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while inner.scanning.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        if inner.scanning.load(Ordering::SeqCst) {
+            return Err("扫描正在进行中".into());
+        }
     }
     // 让上一轮残留的线程(若有)尽快退出
     inner.cancel.lock().unwrap().store(true, Ordering::Relaxed);
@@ -288,7 +298,19 @@ pub fn scan_junk(
 ) -> Result<(), String> {
     let inner = Arc::clone(&state.inner);
     if inner.junk_scanning.swap(true, Ordering::SeqCst) {
-        return Err("残留扫描正在进行中".into());
+        // 典型场景:前端切换路由时已请求取消,但旧线程退出是协作式的,
+        // 这里短暂等待旧线程退出,让"切走再回来立刻重扫"无缝衔接。
+        inner.junk_cancel.lock().unwrap().store(true, Ordering::Relaxed);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while inner.junk_scanning.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        if inner.junk_scanning.load(Ordering::SeqCst) {
+            // 旧线程仍未退出:保持占用标志(旧线程结束时会把它们清掉),直接报错
+            return Err("残留扫描正在进行中".into());
+        }
+        // 旧线程已退出并把标志清为 false,重新置回 true 表示本轮新扫描占用
+        inner.junk_scanning.store(true, Ordering::SeqCst);
     }
     let paths: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
     if paths.is_empty() {

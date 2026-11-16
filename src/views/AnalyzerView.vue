@@ -144,6 +144,9 @@ const matchedCount = computed(() =>
 let firstDeleteError = "";
 let lastDeleteDone = 0;
 
+/** 组件是否已卸载:卸载后不再应用快照,避免 rAF 回调操作已脱离页面的状态 */
+let disposed = false;
+
 /** 快照按帧合并:一帧内只应用最后一个结果,避免连续 JSON 刷新阻塞交互 */
 let pendingSnapshot: ScanResult | null = null;
 let snapshotScheduled = false;
@@ -156,7 +159,7 @@ function applySnapshot(p: ScanResult): void {
     snapshotScheduled = false;
     const next = pendingSnapshot;
     pendingSnapshot = null;
-    if (phase.value === "scanning" && next) result.value = next;
+    if (!disposed && phase.value === "scanning" && next) result.value = next;
   });
 }
 
@@ -508,6 +511,16 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  // 后台清理:扫描是长任务(大目录可达数分钟),离开页面时主动取消,
+  // 否则 Rust 扫描线程继续空转,回到本页再点扫描还会被"扫描正在进行中"挡住。
+  // 取消是协作式的:后端线程感知 cancel 标志后自行退出并复位 scanning 状态。
+  if (phase.value === "scanning") {
+    void api.cancelScan();
+  }
+  // 删除任务不取消:用户已确认的批量删除让它后台跑完
+  // (逐项进回收站,后端结束后自行复位 deleting 标志,不影响下次扫描)。
+  disposed = true;
+  pendingSnapshot = null;
   for (const off of unlisteners) off();
   window.removeEventListener("keydown", onKeydown);
   if (toastTimer !== undefined) window.clearTimeout(toastTimer);

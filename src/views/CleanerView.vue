@@ -137,6 +137,12 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  // 后台清理:垃圾/残留扫描跑在 Rust 独立线程,离开页面时主动取消,
+  // 避免线程空转,也避免回来后"扫描正在进行中"的冲突。
+  if (scanning.value || leftoverScanning.value) {
+    void junkApi.cancelJunk();
+  }
+  // 删除任务不取消:已确认的批量删除让它后台跑完,后端结束后自行复位标志。
   for (const off of unlisteners) off();
 });
 
