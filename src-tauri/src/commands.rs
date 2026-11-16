@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use std::process::Command;
 
 use tauri::{AppHandle, Emitter, State};
 
@@ -173,6 +174,8 @@ pub fn delete_paths(
     *inner.delete_cancel.lock().unwrap() = cancel.clone();
     let epoch = inner.epoch.load(Ordering::SeqCst);
     let total = paths.len();
+    inner.delete_done.store(0, Ordering::SeqCst);
+    inner.delete_total.store(total as u64, Ordering::SeqCst);
 
     std::thread::spawn(move || {
         let mut done = 0usize;
@@ -193,6 +196,7 @@ pub fn delete_paths(
                 }
                 deleter::DeleteEvent::Item(outcome) => {
                     done += 1;
+                    inner.delete_done.store(done as u64, Ordering::SeqCst);
                     let failed = outcome.error.is_some();
                     if !failed {
                         ok += 1;
@@ -230,6 +234,8 @@ pub fn delete_paths(
             },
         );
         inner.deleting.store(false, Ordering::SeqCst);
+        inner.delete_total.store(0, Ordering::SeqCst);
+        inner.delete_done.store(0, Ordering::SeqCst);
     });
     Ok(())
 }
@@ -314,6 +320,77 @@ pub fn cancel_junk(state: State<'_, ScanState>) {
         .lock()
         .unwrap()
         .store(true, Ordering::Relaxed);
+}
+
+/// 扫描 Windows 已安装软件清单(注册表卸载项)。
+/// 只读取 DisplayName/Version/Publisher/UninstallString 等信息。
+#[tauri::command]
+pub fn installed_apps() -> Vec<dto::InstalledAppDto> {
+    #[cfg(windows)]
+    {
+        use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
+        use winreg::RegKey;
+        let locations = [
+            (HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall", 0),
+            (HKEY_LOCAL_MACHINE, "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall", KEY_WOW64_64KEY),
+            (HKEY_LOCAL_MACHINE, "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall", KEY_WOW64_32KEY),
+        ];
+        let mut out = Vec::new();
+        for (hive, path, view) in locations {
+            let root = RegKey::predef(hive);
+            let Ok(uninstall) = root.open_subkey_with_flags(path, KEY_READ | view) else { continue };
+            for key_name in uninstall.enum_keys().flatten() {
+                let Ok(key) = uninstall.open_subkey_with_flags(&key_name, KEY_READ) else { continue };
+                let Ok(name) = key.get_value::<String, _>("DisplayName") else { continue };
+                if name.trim().is_empty() { continue; }
+                let uninstall_command = key.get_value::<String, _>("UninstallString").unwrap_or_default();
+                let install_location = key.get_value::<String, _>("InstallLocation").unwrap_or_default();
+                let publisher = key.get_value::<String, _>("Publisher").unwrap_or_default();
+                let version = key.get_value::<String, _>("DisplayVersion").unwrap_or_default();
+                let estimated_kb = key.get_value::<u32, _>("EstimatedSize").unwrap_or(0);
+                out.push(dto::InstalledAppDto {
+                    id: format!("{}:{}", name, uninstall_command),
+                    name,
+                    version,
+                    publisher,
+                    install_location,
+                    uninstall_command,
+                    estimated_size: estimated_kb as u64 * 1024,
+                });
+            }
+        }
+        out.sort_by_key(|a| a.name.to_lowercase());
+        out.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name));
+        out
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
+/// 启动软件注册表中记录的官方卸载程序,不直接删除安装目录。
+#[tauri::command]
+pub fn launch_uninstaller(uninstall_command: String) -> Result<(), String> {
+    let cmd = uninstall_command.trim();
+    if cmd.is_empty() {
+        return Err("该软件没有注册卸载程序".into());
+    }
+    #[cfg(windows)]
+    {
+        // start 的空标题参数后必须保留注册表中的可执行文件引号,否则含空格路径会被拆开。
+        // 例如: start "" "C:\\Program Files\\Vendor\\unins000.exe" /S
+        Command::new("cmd")
+            .args(["/D", "/C", "start", "", cmd])
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+        Err("软件卸载扫描目前仅支持 Windows".into())
+    }
 }
 
 /// 同步 Windows 原生标题栏深/浅色。

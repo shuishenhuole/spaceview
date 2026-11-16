@@ -25,6 +25,8 @@ pub fn run() {
             commands::junk_roots,
             commands::scan_junk,
             commands::cancel_junk,
+            commands::installed_apps,
+            commands::launch_uninstaller,
             commands::set_titlebar_theme,
         ])
         .setup(|app| {

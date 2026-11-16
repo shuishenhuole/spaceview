@@ -21,6 +21,8 @@ pub struct Inner {
     /// 残留扫描状态(与主扫描互不干扰,但不能同时跑两次)
     pub junk_scanning: AtomicBool,
     pub junk_cancel: Mutex<Arc<AtomicBool>>,
+    pub delete_done: AtomicU64,
+    pub delete_total: AtomicU64,
 }
 
 pub struct ScanState {
@@ -40,6 +42,8 @@ impl Default for ScanState {
                 deleting: AtomicBool::new(false),
                 junk_scanning: AtomicBool::new(false),
                 junk_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
+                delete_done: AtomicU64::new(0),
+                delete_total: AtomicU64::new(0),
             }),
         }
     }

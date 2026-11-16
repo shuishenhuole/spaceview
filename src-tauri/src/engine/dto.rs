@@ -121,6 +121,18 @@ pub struct JunkScanDoneDto {
     pub total_bytes: u64,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledAppDto {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub publisher: String,
+    pub install_location: String,
+    pub uninstall_command: String,
+    pub estimated_size: u64,
+}
+
 fn path_str(p: &std::path::Path) -> String {
     p.to_string_lossy().into_owned()
 }
