@@ -85,19 +85,29 @@ body {
 }
 
 // 清理结果固定列宽:文件名、大小、路径、原因各占稳定轨道,避免互相挤压
+// 垃圾文件行:勾选 | 类型标签 | 名称+所在目录 | 说明 | 大小
+// 列宽用固定值 + 弹性 1fr,保证每行大小列垂直对齐
 .junk-row {
-  grid-template-columns: 18px 104px minmax(130px, 1.2fr) 82px minmax(140px, 1fr) minmax(110px, 0.8fr);
+  grid-template-columns: 18px 72px minmax(0, 1fr) minmax(88px, 0.45fr) 76px;
 
   @media (max-width: 1100px) {
-    grid-template-columns: 18px 94px minmax(130px, 1fr) 78px minmax(110px, 0.9fr);
-    .junk-path { display: none; }
+    grid-template-columns: 18px 72px minmax(0, 1fr) 76px;
+    .junk-reason { display: none; }
   }
 
   @media (max-width: 820px) {
-    grid-template-columns: 18px 86px minmax(120px, 1fr) 72px;
-    .junk-path,
+    grid-template-columns: 18px minmax(0, 1fr) 76px;
+    .junk-kind,
     .junk-reason { display: none; }
   }
+}
+
+// 列表列头:与数据行共用 .junk-row 的列宽
+.junk-head {
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
 }
 
 // 统一细滚动条

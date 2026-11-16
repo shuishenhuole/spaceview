@@ -22,7 +22,7 @@ import AppNav from "@/components/AppNav.vue";
 import ScanLoading from "@/components/ScanLoading.vue";
 import { t } from "@/i18n";
 import { setMessage } from "@/composables/useToast";
-import { humanSize, shortPath } from "@/lib/format";
+import { fileName, humanSize, parentDir } from "@/lib/format";
 import type { JunkItem, JunkRoot, RowAction, InstalledApp } from "@/types";
 
 import ConfirmDelete from "@/components/ConfirmDelete.vue";
@@ -58,6 +58,7 @@ const uninstalling = ref<string | null>(null);
 let unlisteners: UnlistenFn[] = [];
 
 const KIND_LABEL: Record<string, string> = {
+  all: t("cleaner.kind.all"),
   temp: t("cleaner.kind.temp"),
   cache: t("cleaner.kind.cache"),
   leftover: t("cleaner.kind.leftover"),
@@ -385,7 +386,7 @@ async function handleRowAction(action: RowAction): Promise<void> {
           </span>
           <div class="ml-auto flex gap-1">
             <Button
-              v-for="(k) in ['temp', 'cache', 'leftover', 'large', 'log']"
+              v-for="(k) in ['all', 'temp', 'cache', 'leftover', 'large', 'log']"
               :key="k"
               size="xs"
               variant="outline"
@@ -398,6 +399,18 @@ async function handleRowAction(action: RowAction): Promise<void> {
             </Button>
           </div>
         </header>
+
+        <!-- 列头:与数据行共用 .junk-row 列宽,保证垂直对齐 -->
+        <div
+          v-if="visibleItems.length"
+          class="junk-row junk-head grid shrink-0 items-center gap-3 border-b border-border px-4 pb-1 pt-1"
+        >
+          <span class="junk-cb"></span>
+          <span class="junk-kind"></span>
+          <span>{{ t("cleaner.colName") }}</span>
+          <span class="junk-reason">{{ t("cleaner.colReason") }}</span>
+          <span class="text-right">{{ t("cleaner.colSize") }}</span>
+        </div>
 
         <div class="custom-scroll min-h-0 flex-1 overflow-auto px-2 py-2">
           <template v-if="visibleItems.length === 0">
@@ -428,7 +441,7 @@ async function handleRowAction(action: RowAction): Promise<void> {
             @action="handleRowAction"
           >
             <div
-              class="selectable-row junk-row grid cursor-pointer items-center gap-2 rounded-md px-2 py-1.5"
+              class="selectable-row junk-row grid cursor-pointer items-center gap-3 rounded-md px-2 py-1.5"
               :title="it.path"
               @dblclick="handleRowAction({ type: 'reveal', path: it.path, isDir: it.isDir })"
             >
@@ -437,19 +450,21 @@ async function handleRowAction(action: RowAction): Promise<void> {
                 @click.stop
                 @update:model-value="(_v) => toggleItem(it.path)"
               />
-              <Badge :variant="kindVariant(it.kind)">
+              <Badge :variant="kindVariant(it.kind)" class="junk-kind justify-center">
                 {{ KIND_LABEL[it.kind] }}
               </Badge>
-              <span class="truncate text-xs font-medium">
-                {{ it.path.split(/[\\/]+/).pop() }}
+              <div class="min-w-0">
+                <div class="truncate text-xs font-medium leading-5">{{ fileName(it.path) }}</div>
+                <div class="junk-path truncate text-[10px] leading-4 text-muted-foreground">
+                  {{ parentDir(it.path) }}
+                </div>
+              </div>
+              <span class="junk-reason truncate text-[10px] text-muted-foreground">
+                {{ it.reason }}
               </span>
-              <span class="num w-24 shrink-0 text-right text-[10px] text-muted-foreground">
+              <span class="num text-right text-[11px] font-medium leading-5">
                 {{ humanSize(it.size) }}
               </span>
-              <span class="junk-path min-w-0 truncate text-[10px] text-muted-foreground">
-                {{ shortPath(it.path, 38) }}
-              </span>
-              <span class="text-xs text-muted-foreground" v-if="it.reason">{{ it.reason }}</span>
             </div>
           </RowContextMenu>
         </div>
