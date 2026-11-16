@@ -18,6 +18,9 @@ pub struct Inner {
     pub result: Mutex<Option<ScanResult>>,
     pub scanning: AtomicBool,
     pub deleting: AtomicBool,
+    /// 残留扫描状态(与主扫描互不干扰,但不能同时跑两次)
+    pub junk_scanning: AtomicBool,
+    pub junk_cancel: Mutex<Arc<AtomicBool>>,
 }
 
 pub struct ScanState {
@@ -35,6 +38,8 @@ impl Default for ScanState {
                 result: Mutex::new(None),
                 scanning: AtomicBool::new(false),
                 deleting: AtomicBool::new(false),
+                junk_scanning: AtomicBool::new(false),
+                junk_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
             }),
         }
     }

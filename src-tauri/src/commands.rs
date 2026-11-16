@@ -4,10 +4,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, State};
 
-use crate::engine::{deleter, dto, scanner};
+use crate::engine::{deleter, dto, junk, scanner};
 use crate::state::ScanState;
 
 /// 枚举可扫描的顶层存储位置(Windows 盘符 / POSIX 挂载点)
@@ -163,9 +164,6 @@ pub fn delete_paths(
     if inner.deleting.load(Ordering::SeqCst) {
         return Err("删除正在后台进行".into());
     }
-    if inner.result.lock().unwrap().is_none() {
-        return Err("当前没有可同步的扫描结果".into());
-    }
     if paths.is_empty() {
         return Ok(());
     }
@@ -241,6 +239,78 @@ pub fn cancel_delete(state: State<'_, ScanState>) {
     state
         .inner
         .delete_cancel
+        .lock()
+        .unwrap()
+        .store(true, Ordering::Relaxed);
+}
+
+/// 枚举可扫描的残留/垃圾位置(仅返回存在的目录)
+#[tauri::command]
+pub fn junk_roots() -> Vec<dto::JunkRootDto> {
+    junk::junk_roots()
+        .into_iter()
+        .map(|(label, path)| dto::JunkRootDto {
+            label: label.into(),
+            path: path.to_string_lossy().into_owned(),
+        })
+        .collect()
+}
+
+/// 开始扫描残留文件(临时 / 缓存 / 残留 / 大文件)。结束时推送 `junk://done`。
+#[tauri::command]
+pub fn scan_junk(
+    app: AppHandle,
+    state: State<'_, ScanState>,
+    roots: Vec<String>,
+) -> Result<(), String> {
+    let inner = Arc::clone(&state.inner);
+    if inner.junk_scanning.swap(true, Ordering::SeqCst) {
+        return Err("残留扫描正在进行中".into());
+    }
+    let paths: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
+    if paths.is_empty() {
+        inner.junk_scanning.store(false, Ordering::SeqCst);
+        return Ok(());
+    }
+    let cancel = Arc::new(AtomicBool::new(false));
+    *inner.junk_cancel.lock().unwrap() = cancel.clone();
+
+    std::thread::spawn(move || {
+        let mut last_tick = Instant::now();
+        let items = junk::scan_junk(&paths, cancel.clone(), |scanned| {
+            if last_tick.elapsed() >= Duration::from_millis(500) {
+                last_tick = Instant::now();
+                let _ = app.emit("junk://tick", dto::JunkTickDto { scanned });
+            }
+        });
+        let total_bytes: u64 = items.iter().map(|i| i.size).sum();
+        let _ = app.emit(
+            "junk://done",
+            dto::JunkScanDoneDto {
+                items: items
+                    .into_iter()
+                    .map(|i| dto::JunkItemDto {
+                        path: i.path.to_string_lossy().into_owned(),
+                        size: i.size,
+                        is_dir: i.is_dir,
+                        kind: i.kind.as_str().into(),
+                        reason: i.reason,
+                    })
+                    .collect(),
+                total_bytes,
+            },
+        );
+        inner.junk_scanning.store(false, Ordering::SeqCst);
+    });
+    Ok(())
+}
+
+/// 请求取消尚未开始的残留扫描项
+#[tauri::command]
+pub fn cancel_junk(state: State<'_, ScanState>) {
+    state
+        .inner
+        .junk_cancel
         .lock()
         .unwrap()
         .store(true, Ordering::Relaxed);

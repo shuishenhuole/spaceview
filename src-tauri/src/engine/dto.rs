@@ -90,6 +90,37 @@ pub struct DeleteDoneDto {
     pub total: usize,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct JunkRootDto {
+    pub label: String,
+    pub path: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct JunkItemDto {
+    pub path: String,
+    pub size: u64,
+    pub is_dir: bool,
+    /// temp / cache / leftover / large / log(前端据此翻译)
+    pub kind: String,
+    pub reason: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct JunkTickDto {
+    pub scanned: usize,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct JunkScanDoneDto {
+    pub items: Vec<JunkItemDto>,
+    pub total_bytes: u64,
+}
+
 fn path_str(p: &std::path::Path) -> String {
     p.to_string_lossy().into_owned()
 }

@@ -22,6 +22,9 @@ pub fn run() {
             commands::set_paused,
             commands::delete_paths,
             commands::cancel_delete,
+            commands::junk_roots,
+            commands::scan_junk,
+            commands::cancel_junk,
             commands::set_titlebar_theme,
         ])
         .setup(|app| {

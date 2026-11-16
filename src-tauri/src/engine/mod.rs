@@ -3,5 +3,6 @@
 
 pub mod deleter;
 pub mod dto;
+pub mod junk;
 pub mod scanner;
 pub mod tree;
