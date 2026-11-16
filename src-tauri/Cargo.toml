@@ -29,6 +29,12 @@ trash = "5"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# 删除被占用文件:Restart Manager 查找占用进程 + 结束进程
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_RestartManager",
+  "Win32_System_Threading",
+] }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

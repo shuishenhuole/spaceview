@@ -87,16 +87,24 @@ pub fn run_delete<F: FnMut(DeleteEvent)>(
                     }
                     // trash 在 Windows 上按线程 CoInitializeEx,失败时会 panic;
                     // 转成普通错误,避免任务静默僵死。
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        trash::delete(&path)
-                    }));
-                    let error = match result {
-                        Ok(Ok(())) => None,
-                        Ok(Err(e)) => Some(e.to_string()),
-                        Err(payload) => {
-                            Some(format!("删除线程内部错误:{}", panic_message(&*payload)))
+                    let mut error = delete_once(&path);
+                    // Windows:文件被占用(共享冲突)时,先结束占用进程再重试一次。
+                    // 只针对错误码判定,其他错误(路径不存在等)不做解锁动作。
+                    #[cfg(windows)]
+                    if error.as_deref().is_some_and(super::win_lock::is_in_use_error) {
+                        let killed = super::win_lock::release_locks(&path);
+                        if !killed.is_empty() {
+                            error = delete_once(&path);
+                            // 释放锁后仍失败:把已结束的进程附到错误信息里,方便用户理解
+                            if let Some(msg) = error {
+                                error = Some(format!(
+                                    "已结束占用进程 [{}],但仍删除失败:{}",
+                                    killed.join(", "),
+                                    msg
+                                ));
+                            }
                         }
-                    };
+                    }
                     if tx
                         .send(DeleteEvent::Item(DeleteOutcome { path, error }))
                         .is_err()
@@ -131,6 +139,18 @@ pub fn run_delete<F: FnMut(DeleteEvent)>(
 
     summary.cancelled = cancel.load(Ordering::Relaxed);
     summary
+}
+
+/// 单次 trash 删除,统一兜住 panic(COM 初始化失败等)转成错误文本
+fn delete_once(path: &PathBuf) -> Option<String> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        trash::delete(path)
+    }));
+    match result {
+        Ok(Ok(())) => None,
+        Ok(Err(e)) => Some(e.to_string()),
+        Err(payload) => Some(format!("删除线程内部错误:{}", panic_message(&*payload))),
+    }
 }
 
 /// 把 panic payload 转成可读文本
