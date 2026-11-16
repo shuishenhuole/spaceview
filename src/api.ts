@@ -8,6 +8,7 @@ import type {
   JunkRoot,
   JunkScanDone,
   JunkTick,
+  InstalledApp,
   ScanResult,
   ScanTick,
 } from "./types";
@@ -29,6 +30,9 @@ export const junkApi = {
   junkRoots: () => invoke<JunkRoot[]>("junk_roots"),
   scanJunk: (roots: string[]) => invoke<void>("scan_junk", { roots }),
   cancelJunk: () => invoke<void>("cancel_junk"),
+  installedApps: () => invoke<InstalledApp[]>("installed_apps"),
+  launchUninstaller: (uninstallCommand: string) =>
+    invoke<void>("launch_uninstaller", { uninstallCommand }),
 };
 
 export interface ScanEventHandlers {
@@ -70,5 +74,19 @@ export function bindJunkEvents(h: JunkEventHandlers): Promise<UnlistenFn[]> {
     listen<JunkTick>("junk://tick", (e) => h.onTick(e.payload)),
     listen<JunkScanDone>("junk://done", (e) => h.onDone(e.payload)),
     listen<string>("junk://failed", (e) => h.onFailed(e.payload)),
+  ]);
+}
+
+export interface DeleteEventHandlers {
+  onStarted: (p: DeleteStarted) => void;
+  onItem: (p: DeleteItem) => void;
+  onDone: (p: DeleteDone) => void;
+}
+
+export function bindDeleteEvents(h: DeleteEventHandlers): Promise<UnlistenFn[]> {
+  return Promise.all([
+    listen<DeleteStarted>("delete://started", (e) => h.onStarted(e.payload)),
+    listen<DeleteItem>("delete://item", (e) => h.onItem(e.payload)),
+    listen<DeleteDone>("delete://done", (e) => h.onDone(e.payload)),
   ]);
 }

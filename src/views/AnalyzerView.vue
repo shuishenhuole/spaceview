@@ -20,11 +20,11 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { gsap } from "gsap";
-import { LoaderCircleIcon } from "@lucide/vue";
 
 import { api, bindScanEvents } from "@/api";
 import logoUrl from "@/assets/logo.png";
-import { enterPanel, enterStagger, fadeIn, fadeOut } from "@/lib/motion";
+import { enterPanel, enterStagger } from "@/lib/motion";
+import ScanLoading from "@/components/ScanLoading.vue";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { t, toggleLang } from "@/i18n";
 import {
@@ -99,27 +99,10 @@ const epoch = ref(0);
 /** 根容器引用:GSAP context 的作用域,卸载时统一 revert */
 const shellRef = ref<HTMLElement | null>(null);
 
-/** 视图切换加载遮罩:重型视图挂载时盖住布局抖动,渲染完成再淡出(GSAP 控制) */
-const viewLoading = ref(false);
-let viewLoadingTimer: number | undefined;
-
 /** 反馈气泡 */
 let toastSeq = 0;
 let toastTimer: number | undefined;
 const toast = ref<{ id: number; text: string } | null>(null);
-
-function beginViewLoad(): void {
-  viewLoading.value = true;
-  if (viewLoadingTimer !== undefined) window.clearTimeout(viewLoadingTimer);
-  // 让出两帧给 Treemap / 目录树完成挂载与布局,最短展示 ~200ms 避免闪烁
-  requestAnimationFrame(() =>
-    requestAnimationFrame(() => {
-      viewLoadingTimer = window.setTimeout(() => {
-        viewLoading.value = false;
-      }, 200);
-    }),
-  );
-}
 
 /** 操作反馈气泡 */
 function setMessage(text: string): void {
@@ -473,24 +456,12 @@ function onKeydown(e: KeyboardEvent): void {
 // ---------- 动效 ----------
 let animContext: ReturnType<typeof gsap.context> | null = null;
 
-/** 结果从"无"到"有"的瞬间:左右面板依次淡入上移 */
+/** 结果从"无"到"有"的瞬间:左右面板依次淡入(与页面切换同一套动效参数) */
 watch(result, async (next, prev) => {
   if (!next || prev) return;
   await nextTick();
   enterPanel(shellRef.value?.querySelectorAll("[data-result-panel]") ?? null, {
-    stagger: 0.09,
-    y: 16,
-    duration: 0.45,
-  });
-});
-
-/** Tab 切换:先盖加载遮罩,再让内容区淡入 */
-watch(tab, async () => {
-  beginViewLoad();
-  await nextTick();
-  enterPanel(shellRef.value?.querySelector("[data-tab-panel]") ?? null, {
-    y: 8,
-    duration: 0.3,
+    stagger: 0.07,
   });
 });
 
@@ -525,7 +496,6 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   for (const off of unlisteners) off();
   window.removeEventListener("keydown", onKeydown);
-  if (viewLoadingTimer !== undefined) window.clearTimeout(viewLoadingTimer);
   if (toastTimer !== undefined) window.clearTimeout(toastTimer);
   animContext?.revert();
 });
@@ -587,21 +557,24 @@ onBeforeUnmount(() => {
           class="panel relative flex min-w-0 flex-1 flex-col overflow-hidden"
         >
           <div
-            v-if="!result"
+            v-if="!result && phase !== 'scanning'"
             class="flex flex-1 flex-col items-center justify-center gap-3 text-center"
           >
             <img :src="logoUrl" alt="SpaceView" class="size-16 rounded-2xl shadow-lg" />
             <h2 class="text-lg font-semibold tracking-tight">SpaceView</h2>
-            <p class="max-w-sm text-sm text-muted-foreground">
-              {{ phase === "scanning" ? t("scanning.wait") : t("idle.hint") }}
-            </p>
-            <LoaderCircleIcon
-              v-if="phase === 'scanning'"
-              class="size-5 animate-spin text-brand"
-            />
+            <p class="max-w-sm text-sm text-muted-foreground">{{ t("idle.hint") }}</p>
           </div>
+          <ScanLoading
+            v-else-if="!result && phase === 'scanning'"
+            class="flex-1"
+            :dirs="progress.dirs"
+            :files="progress.files"
+            :bytes="progress.bytes"
+            :cur="progress.cur"
+          />
 
-          <Tabs v-else v-model="tab" class="flex min-h-0 flex-1 flex-col p-3">
+          <div v-if="phase === 'scanning' && result" class="scan-progress shrink-0" />
+          <Tabs v-if="result" v-model="tab" class="flex min-h-0 flex-1 flex-col p-3">
             <div class="flex shrink-0 items-center gap-3">
               <span
                 v-if="phase === 'scanning'"
@@ -651,23 +624,7 @@ onBeforeUnmount(() => {
             </TabsContent>
           </Tabs>
 
-          <!-- 视图切换/结果刷新时的加载遮罩:不卸载内容,只盖住渲染瞬间的卡顿 -->
-          <Transition :css="false" @enter="fadeIn" @leave="fadeOut">
-            <div v-if="viewLoading" class="view-loading">
-              <div class="flex flex-col items-center gap-3">
-                <LoaderCircleIcon class="size-6 animate-spin text-brand" />
-                <span class="text-xs font-medium text-muted-foreground">
-                  {{ t("loading.view") }}
-                </span>
-              </div>
-              <div class="skeleton-stack">
-                <div class="skeleton-bar w-4/5"></div>
-                <div class="skeleton-bar w-3/5"></div>
-                <div class="skeleton-bar w-11/12"></div>
-                <div class="skeleton-bar w-2/3"></div>
-              </div>
-            </div>
-          </Transition>
+          <ScanLoading v-if="phase === 'scanning'" :dirs="progress.dirs" :files="progress.files" :bytes="progress.bytes" :cur="progress.cur" />
         </main>
       </div>
 

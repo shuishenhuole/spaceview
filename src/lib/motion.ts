@@ -29,12 +29,60 @@ function isEmpty(targets: Targets): boolean {
   return false;
 }
 
+/** 统一动效语言:所有切换/入场都从这里取值,保证节奏一致 */
+export const MOTION = {
+  /** 快速反馈(悬停、徽标) */
+  fast: 0.2,
+  /** 标准切换(页面、面板) */
+  base: 0.32,
+  /** 首屏/多元素入场 */
+  slow: 0.46,
+  /** 统一缓动 */
+  ease: "power2.out",
+  /** 位移距离 */
+  y: 10,
+} as const;
+
 export interface EnterOptions {
   y?: number;
   duration?: number;
   stagger?: number;
   delay?: number;
   scale?: number;
+}
+
+/** 路由页面切换:统一淡入上移 / 淡出 */
+export function pageEnter(el: Element, done: () => void): void {
+  if (!motionEnabled()) {
+    gsap.set(el, { autoAlpha: 1, y: 0 });
+    done();
+    return;
+  }
+  gsap.fromTo(
+    el,
+    { autoAlpha: 0, y: MOTION.y },
+    {
+      autoAlpha: 1,
+      y: 0,
+      duration: MOTION.base,
+      ease: MOTION.ease,
+      onComplete: done,
+    },
+  );
+}
+
+export function pageLeave(el: Element, done: () => void): void {
+  if (!motionEnabled()) {
+    done();
+    return;
+  }
+  gsap.to(el, {
+    autoAlpha: 0,
+    y: -MOTION.y / 2,
+    duration: MOTION.fast,
+    ease: "power1.in",
+    onComplete: done,
+  });
 }
 
 /** 多个元素依次淡入上移(工具栏 / 面板入场) */
@@ -45,13 +93,13 @@ export function enterStagger(
   if (!motionEnabled() || isEmpty(targets)) return null;
   return gsap.fromTo(
     targets as TweenTarget,
-    { autoAlpha: 0, y: opts.y ?? 14, scale: opts.scale ?? 1 },
+    { autoAlpha: 0, y: opts.y ?? MOTION.y, scale: opts.scale ?? 1 },
     {
       autoAlpha: 1,
       y: 0,
       scale: 1,
-      duration: opts.duration ?? 0.5,
-      stagger: opts.stagger ?? 0.08,
+      duration: opts.duration ?? MOTION.slow,
+      stagger: opts.stagger ?? 0.07,
       delay: opts.delay ?? 0,
       ease: "power3.out",
       clearProps: "transform,opacity,visibility",
@@ -67,13 +115,13 @@ export function enterPanel(
   if (!motionEnabled() || isEmpty(target)) return null;
   return gsap.fromTo(
     target as TweenTarget,
-    { autoAlpha: 0, y: opts.y ?? 8 },
+    { autoAlpha: 0, y: opts.y ?? MOTION.y },
     {
       autoAlpha: 1,
       y: 0,
-      duration: opts.duration ?? 0.34,
+      duration: opts.duration ?? MOTION.base,
       stagger: opts.stagger ?? 0,
-      ease: "power2.out",
+      ease: MOTION.ease,
       clearProps: "transform,opacity,visibility",
     },
   );

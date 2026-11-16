@@ -103,3 +103,27 @@ export interface RowAction {
   /** 目录用 openPath 打开自身,文件用 revealItemInDir 在所在目录选中 */
   isDir: boolean;
 }
+
+/** 电脑清理:可扫描位置 */
+export interface JunkRoot { label: string; path: string; }
+/** 电脑清理:可清理项 */
+export interface JunkItem {
+  path: string;
+  size: number;
+  isDir: boolean;
+  /// temp / cache / leftover / large / log
+  kind: string;
+  reason: string;
+}
+export interface JunkScanDone { items: JunkItem[]; totalBytes: number; }
+export interface JunkTick { scanned: number; }
+
+export interface InstalledApp {
+  id: string;
+  name: string;
+  version: string;
+  publisher: string;
+  installLocation: string;
+  uninstallCommand: string;
+  estimatedSize: number;
+}

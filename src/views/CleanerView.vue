@@ -9,9 +9,9 @@ import {
   type Ref,
 } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { Trash2Icon } from "@lucide/vue";
+import { LoaderCircleIcon, PackageOpenIcon, SearchIcon, Trash2Icon } from "@lucide/vue";
 
-import { api, junkApi, bindJunkEvents } from "@/api";
+import { api, junkApi, bindDeleteEvents, bindJunkEvents } from "@/api";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Button } from "@/components/ui/button";
@@ -19,9 +19,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import logoUrl from "@/assets/logo.png";
 import AppNav from "@/components/AppNav.vue";
+import ScanLoading from "@/components/ScanLoading.vue";
 import { t } from "@/i18n";
+import { setMessage } from "@/composables/useToast";
 import { humanSize, shortPath } from "@/lib/format";
-import type { JunkItem, JunkRoot, RowAction } from "@/types";
+import type { JunkItem, JunkRoot, RowAction, InstalledApp } from "@/types";
 
 import ConfirmDelete from "@/components/ConfirmDelete.vue";
 import RowContextMenu from "@/components/RowContextMenu.vue";
@@ -39,6 +41,19 @@ const filterKind = ref<"all" | "temp" | "cache" | "leftover" | "large" | "log">(
 );
 const errorMsg = ref("");
 const confirmOpen = ref(false);
+const page = ref<"junk" | "software">("junk");
+const deleting = ref<{ done: number; total: number; ok: number; current: string | null } | null>(null);
+const deleteErrors = ref<string[]>([]);
+const leftoverRoots = ref<string[]>([]);
+const leftoverItems = ref<JunkItem[]>([]);
+const leftoverScanning = ref(false);
+const leftoverTick = ref(0);
+const junkScanMode = ref<"junk" | "leftover">("junk");
+const selectedLeftovers = ref<string[]>([]);
+const software = ref<InstalledApp[]>([]);
+const softwareSearch = ref("");
+const softwareLoading = ref(false);
+const uninstalling = ref<string | null>(null);
 
 let unlisteners: UnlistenFn[] = [];
 
@@ -71,19 +86,52 @@ onMounted(async () => {
   } catch (e) {
     errorMsg.value = String(e);
   }
-  unlisteners = await bindJunkEvents({
+  const junkListeners = await bindJunkEvents({
     onTick: (p: { scanned: number }) => {
-      scanned.value = p.scanned;
+      if (junkScanMode.value === "leftover") leftoverTick.value = p.scanned;
+      else scanned.value = p.scanned;
     },
     onDone: (p: { items: JunkItem[] }) => {
-      items.value = p.items;
-      scanning.value = false;
+      if (junkScanMode.value === "leftover") {
+        leftoverItems.value = p.items;
+        leftoverScanning.value = false;
+      } else {
+        items.value = p.items;
+        scanning.value = false;
+      }
     },
     onFailed: (m: string) => {
       scanning.value = false;
       errorMsg.value = m;
     },
   });
+  const deleteListeners = await bindDeleteEvents({
+    onStarted: (p) => {
+      deleting.value = {
+        done: p.done,
+        total: p.total,
+        ok: deleting.value?.ok ?? 0,
+        current: p.path,
+      };
+    },
+    onItem: (p) => {
+      if (p.error) deleteErrors.value.push(`${p.path}: ${p.error}`);
+      const set = new Set(checked.value);
+      if (p.error === null) {
+        set.delete(p.path);
+        items.value = items.value.filter((item) => item.path !== p.path);
+        leftoverItems.value = leftoverItems.value.filter((item) => item.path !== p.path);
+      }
+      checked.value = [...set];
+      deleting.value = { done: p.done, total: p.total, ok: p.ok, current: null };
+    },
+    onDone: (p) => {
+      deleting.value = null;
+      if (p.failed) errorMsg.value = deleteErrors.value[0] ?? `${p.failed} delete(s) failed`;
+      deleteErrors.value = [];
+    },
+  });
+  unlisteners = [...junkListeners, ...deleteListeners];
 });
 
 onBeforeUnmount(() => {
@@ -126,6 +174,7 @@ async function startScan(): Promise<void> {
   checked.value = [];
   errorMsg.value = "";
   scanning.value = true;
+  junkScanMode.value = "junk";
   scanned.value = 0;
   try {
     await junkApi.scanJunk(rootsPaths);
@@ -158,16 +207,77 @@ function clearItems(): void {
 async function performDelete(): Promise<void> {
   confirmOpen.value = false;
   const paths = [...checked.value];
-  if (!paths.length) return;
+  if (!paths.length || deleting.value) return;
+  deleteErrors.value = [];
+  deleting.value = { done: 0, total: paths.length, ok: 0, current: null };
   try {
     await api.deletePaths(paths);
   } catch (e) {
+    deleting.value = null;
     errorMsg.value = String(e);
+  }
+}
+
+const filteredSoftware = computed(() => {
+  const query = softwareSearch.value.trim().toLocaleLowerCase();
+  if (!query) return software.value;
+  return software.value.filter((app) =>
+    `${app.name} ${app.publisher} ${app.version}`.toLocaleLowerCase().includes(query),
+  );
+});
+
+async function scanSoftware(): Promise<void> {
+  softwareLoading.value = true;
+  errorMsg.value = "";
+  try {
+    software.value = await junkApi.installedApps();
+  } catch (e) {
+    errorMsg.value = String(e);
+  } finally {
+    softwareLoading.value = false;
+  }
+}
+
+async function uninstallApp(app: (typeof software.value)[number]): Promise<void> {
+  if (!app.uninstallCommand) {
+    errorMsg.value = t("cleaner.noUninstaller");
     return;
   }
-  checked.value = [];
-  items.value = items.value.filter((i) => !paths.includes(i.path));
-  if (items.value.length === 0) errorMsg.value = "";
+  uninstalling.value = app.id;
+  errorMsg.value = "";
+  try {
+    await junkApi.launchUninstaller(app.uninstallCommand);
+    setMessage(t("cleaner.uninstallerStarted", app.name));
+    // 卸载由厂商程序交互完成;卸载后扫描安装目录和用户数据目录找残留。
+    if (app.installLocation) leftoverRoots.value = [app.installLocation];
+  } catch (e) {
+    errorMsg.value = String(e);
+  } finally {
+    uninstalling.value = null;
+  }
+}
+
+async function scanLeftovers(): Promise<void> {
+  const paths = leftoverRoots.value.length ? leftoverRoots.value : selectedRoots.value;
+  if (!paths.length) return;
+  leftoverScanning.value = true;
+  junkScanMode.value = "leftover";
+  leftoverItems.value = [];
+  selectedLeftovers.value = [];
+  leftoverTick.value = 0;
+  try {
+    await junkApi.scanJunk(paths);
+  } catch (e) {
+    errorMsg.value = String(e);
+    leftoverScanning.value = false;
+  }
+}
+
+function toggleLeftover(path: string): void {
+  const selected = new Set(selectedLeftovers.value);
+  if (selected.has(path)) selected.delete(path);
+  else selected.add(path);
+  selectedLeftovers.value = [...selected];
 }
 
 async function handleRowAction(action: RowAction): Promise<void> {
@@ -195,9 +305,18 @@ async function handleRowAction(action: RowAction): Promise<void> {
         <img :src="logoUrl" alt="SpaceView" class="size-full" />
       </div>
       <AppNav />
+      <div class="ml-auto flex gap-1">
+        <Button size="xs" :variant="page === 'junk' ? 'secondary' : 'ghost'" @click="page = 'junk'">
+          {{ t("cleaner.junkTab") }}
+        </Button>
+        <Button size="xs" :variant="page === 'software' ? 'secondary' : 'ghost'" @click="page = 'software'">
+          <PackageOpenIcon />
+          {{ t("cleaner.softwareTab") }}
+        </Button>
+      </div>
     </header>
 
-    <main class="mx-3 mt-2 mb-2 flex min-h-0 flex-1 gap-3 overflow-hidden">
+    <main v-if="page === 'junk'" class="mx-3 mt-2 mb-2 flex min-h-0 flex-1 gap-3 overflow-hidden">
       <!-- 左侧:扫描位置 -->
       <aside class="panel flex w-[360px] shrink-0 flex-col overflow-hidden">
         <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
@@ -282,9 +401,13 @@ async function handleRowAction(action: RowAction): Promise<void> {
 
         <div class="custom-scroll min-h-0 flex-1 overflow-auto px-2 py-2">
           <template v-if="visibleItems.length === 0">
-            <p v-if="scanning" class="px-3 py-8 text-center text-xs text-muted-foreground">
-              {{ t("cleaner.scanning") }}
-            </p>
+            <ScanLoading
+              v-if="scanning"
+              class="px-3"
+              compact
+              :title="t('cleaner.scanning')"
+              :files="scanned"
+            />
             <p v-else-if="items.length === 0" class="px-3 py-8 text-center text-xs text-muted-foreground">
               {{ t("cleaner.empty") }}
             </p>
@@ -305,7 +428,7 @@ async function handleRowAction(action: RowAction): Promise<void> {
             @action="handleRowAction"
           >
             <div
-              class="selectable-row flex cursor-pointer items-center gap-2 rounded-md px-2 py-1"
+              class="selectable-row junk-row grid cursor-pointer items-center gap-2 rounded-md px-2 py-1.5"
               :title="it.path"
               @dblclick="handleRowAction({ type: 'reveal', path: it.path, isDir: it.isDir })"
             >
@@ -320,10 +443,10 @@ async function handleRowAction(action: RowAction): Promise<void> {
               <span class="truncate text-xs font-medium">
                 {{ it.path.split(/[\\/]+/).pop() }}
               </span>
-              <span class="num ml-auto w-24 shrink-0 text-right text-[10px] text-muted-foreground">
+              <span class="num w-24 shrink-0 text-right text-[10px] text-muted-foreground">
                 {{ humanSize(it.size) }}
               </span>
-              <span class="ml-auto shrink-0 text-[10px] text-muted-foreground hidden md:inline">
+              <span class="junk-path min-w-0 truncate text-[10px] text-muted-foreground">
                 {{ shortPath(it.path, 38) }}
               </span>
               <span class="text-xs text-muted-foreground" v-if="it.reason">{{ it.reason }}</span>
@@ -363,7 +486,82 @@ async function handleRowAction(action: RowAction): Promise<void> {
             </Button>
           </div>
         </footer>
+        <div v-if="deleting" class="border-t border-border px-3 py-2">
+          <div class="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+            <LoaderCircleIcon class="size-3.5 animate-spin text-brand" />
+            <span>{{ t("cleaner.deleting") }}</span>
+            <span class="num ml-auto">{{ deleting.done }}/{{ deleting.total }}</span>
+            <span v-if="deleting.current" class="max-w-[35%] truncate">{{ deleting.current }}</span>
+          </div>
+          <div class="h-1.5 overflow-hidden rounded-full bg-muted">
+            <div class="h-full bg-brand transition-all" :style="{ width: `${deleting.total ? deleting.done / deleting.total * 100 : 0}%` }"></div>
+          </div>
+        </div>
       </main>
+    </main>
+
+    <main v-else class="mx-3 mt-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+      <section class="panel flex min-h-0 flex-1 flex-col overflow-hidden">
+        <header class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+          <PackageOpenIcon class="size-4 text-brand" />
+          <div>
+            <h2 class="text-sm font-semibold">{{ t("cleaner.softwareTitle") }}</h2>
+            <p class="text-[11px] text-muted-foreground">{{ t("cleaner.softwareSubtitle") }}</p>
+          </div>
+          <Button class="ml-auto" size="sm" :disabled="softwareLoading" @click="scanSoftware">
+            <LoaderCircleIcon v-if="softwareLoading" class="animate-spin" />
+            <SearchIcon v-else />
+            {{ softwareLoading ? t("cleaner.scanning") : t("cleaner.scanSoftware") }}
+          </Button>
+        </header>
+        <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+          <SearchIcon class="size-3.5 text-muted-foreground" />
+          <input v-model="softwareSearch" class="h-8 min-w-0 flex-1 bg-transparent text-xs outline-none" :placeholder="t('cleaner.softwareSearch')" />
+          <span class="text-[11px] text-muted-foreground">{{ software.length }}</span>
+        </div>
+        <div class="custom-scroll min-h-0 flex-1 overflow-auto p-2">
+          <div v-if="!software.length" class="grid h-full place-items-center text-xs text-muted-foreground">
+            {{ t("cleaner.softwareEmpty") }}
+          </div>
+          <div v-else class="grid gap-1">
+            <div v-for="app in filteredSoftware" :key="app.id" class="software-row grid grid-cols-[minmax(0,1fr)_150px_100px_112px] items-center gap-3 rounded-lg border border-transparent px-3 py-2 hover:border-border hover:bg-muted/50">
+              <div class="min-w-0">
+                <div class="truncate text-xs font-medium">{{ app.name }}</div>
+                <div class="truncate text-[10px] text-muted-foreground">{{ app.publisher || t("cleaner.unknownPublisher") }}</div>
+              </div>
+              <div class="truncate text-[10px] text-muted-foreground">{{ app.version || "-" }}</div>
+              <div class="text-right text-[10px] text-muted-foreground">{{ app.estimatedSize ? humanSize(app.estimatedSize) : "-" }}</div>
+              <Button size="xs" variant="outline" :disabled="uninstalling === app.id || !app.uninstallCommand" @click="uninstallApp(app)">
+                <LoaderCircleIcon v-if="uninstalling === app.id" class="animate-spin" />
+                {{ uninstalling === app.id ? t("cleaner.uninstalling") : t("cleaner.uninstall") }}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel flex min-h-0 flex-[0.7] flex-col overflow-hidden">
+        <header class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+          <span class="text-xs font-semibold">{{ t("cleaner.leftoverTitle") }}</span>
+          <span class="text-[11px] text-muted-foreground">{{ leftoverItems.length }}</span>
+          <Button class="ml-auto" size="xs" :disabled="leftoverScanning" @click="scanLeftovers">
+            <LoaderCircleIcon v-if="leftoverScanning" class="animate-spin" />
+            {{ leftoverScanning ? t("cleaner.scanning") : t("cleaner.scanLeftovers") }}
+          </Button>
+        </header>
+        <div class="custom-scroll min-h-0 flex-1 overflow-auto p-2">
+          <div v-if="!leftoverItems.length" class="grid h-full place-items-center text-xs text-muted-foreground">
+            {{ t("cleaner.leftoverEmpty") }}
+          </div>
+          <div v-else class="grid gap-1">
+            <div v-for="item in leftoverItems.slice(0, RENDER_LIMIT)" :key="item.path" class="grid grid-cols-[24px_minmax(0,1fr)_100px] items-center gap-2 rounded px-2 py-1 hover:bg-muted/50">
+              <Checkbox :model-value="selectedLeftovers.includes(item.path)" @update:model-value="toggleLeftover(item.path)" />
+              <span class="truncate text-xs" :title="item.path">{{ item.path }}</span>
+              <span class="text-right text-[10px] text-muted-foreground">{{ humanSize(item.size) }}</span>
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
 
     <ConfirmDelete
