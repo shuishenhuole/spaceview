@@ -115,11 +115,17 @@ function setMessage(text: string): void {
 }
 
 // ---------- 派生数据 ----------
+/** 扫描期间已删除成功的路径:随后的快照仍会带回它们,先在前端过滤,
+ *  等扫描结束(Done)时后端会把这些路径从终值里扣掉。 */
+const deletedPaths = ref<string[]>([]);
+const deletedSet = computed(() => new Set(deletedPaths.value));
+
 /** 大文件列表:过滤 + 排序 + 渲染上限(与后端 TopN 降序口径一致) */
 function filterFiles(res: ScanResult, limit: number): FileHit[] {
   const needle = filterText.value.trim().toLowerCase();
   const rows = res.topFiles.filter(
     (h) =>
+      !deletedSet.value.has(h.path) &&
       h.size >= minBytes.value &&
       (!needle || h.path.toLowerCase().includes(needle)),
   );
@@ -166,6 +172,7 @@ const handlers = {
   onSnapshot: (p: ScanResult) => applySnapshot(p),
   onDone: (p: ScanResult) => {
     result.value = p;
+    deletedPaths.value = [];
     phase.value = "done";
     selected.value = [];
     focusRow.value = null;
@@ -202,8 +209,13 @@ const handlers = {
     lastDeleteDone = p.done;
     // 成功项从勾选集剔除;失败项放回勾选集便于直接重试
     const set = new Set(selected.value);
-    if (p.error === null) set.delete(p.path);
-    else {
+    if (p.error === null) {
+      set.delete(p.path);
+      // 扫描中删除:快照会把该文件再带回来,记下来在前端过滤掉
+      if (phase.value === "scanning" && !deletedSet.value.has(p.path)) {
+        deletedPaths.value = [...deletedPaths.value, p.path];
+      }
+    } else {
       set.add(p.path);
       if (!firstDeleteError) firstDeleteError = p.error;
     }
@@ -243,6 +255,7 @@ async function startScan(): Promise<void> {
   epoch.value += 1;
   const root = targetPath.value;
   result.value = null;
+  deletedPaths.value = [];
   drill.value = [ROOT];
   selected.value = [];
   focusRow.value = null;
@@ -315,7 +328,8 @@ const toggleMotion = (): void => {
 
 async function performDelete(): Promise<void> {
   confirmOpen.value = false;
-  if (phase.value !== "done" || deleting.value) return;
+  // 扫描进行中也允许删除(文件已列出即可清理),仅删除任务不能并发
+  if ((phase.value !== "done" && phase.value !== "scanning") || deleting.value) return;
   const paths = [...selected.value];
   if (!paths.length) return;
   firstDeleteError = "";
@@ -573,7 +587,9 @@ onBeforeUnmount(() => {
             :cur="progress.cur"
           />
 
-          <div v-if="phase === 'scanning' && result" class="scan-progress shrink-0" />          <Tabs v-if="result" v-model="tab" class="flex min-h-0 flex-1 flex-col p-3">
+          <div v-if="phase === 'scanning' && result" class="scan-progress shrink-0" />
+
+          <Tabs v-if="result" v-model="tab" class="flex min-h-0 flex-1 flex-col p-3">
             <div class="flex shrink-0 items-center gap-3">
               <span
                 v-if="phase === 'scanning'"

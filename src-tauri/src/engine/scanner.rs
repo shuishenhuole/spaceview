@@ -29,6 +29,9 @@ const TICK_INTERVAL: Duration = Duration::from_millis(500);
 /// 部分快照更重(整棵树的克隆 + 聚合 + 序列化),保持 1s 一次;
 /// 与 500ms 的进度 tick 共用同一个调度点,避免额外计时器检查。
 const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(1000);
+/// 快照里只带前端首屏能渲染的前 N 条大文件(前端 RENDER_LIMIT=1000),
+/// 避免每秒克隆上万个 PathBuf、无谓加大 IPC 负载。
+const SNAPSHOT_TOP_LIMIT: usize = 1_500;
 
 /// 一个大文件命中记录
 #[derive(Clone)]
@@ -193,6 +196,8 @@ fn build_partial(
         })
         .collect();
     top_files.sort_unstable_by(|a, b| b.size.cmp(&a.size));
+    // 快照只用于实时预览,截断到前端渲染上限附近即可(终值仍是完整 TopN)
+    top_files.truncate(SNAPSHOT_TOP_LIMIT);
 
     let mut ext_stats: Vec<ExtStat> = exts
         .iter()
@@ -272,6 +277,11 @@ fn run<F: FnMut(ScanEvent)>(
     let mut cur = String::new();
     let mut last_tick = Instant::now();
     let mut last_snap = Instant::now();
+    // 快照自适应间隔:构建一次快照(克隆整棵树 + TopN)的耗时随扫描规模增长,
+    // 若仍按固定 1s 推送,超大目录(如整个 C:)下快照线程会长期满载,
+    // 序列化/JSON 解析会把 WebView 主线程压死(表现为界面卡住、按钮点不动)。
+    // 因此下一次快照至少间隔「基础间隔」与「上次构建耗时 × 8」中的较大者。
+    let mut snap_gap = SNAPSHOT_INTERVAL;
 
     let denied_ref = &denied;
     #[cfg(target_os = "macos")]
@@ -396,11 +406,18 @@ fn run<F: FnMut(ScanEvent)>(
                 bytes,
                 cur: cur.clone(),
             });
-            if last_snap.elapsed() >= SNAPSHOT_INTERVAL {
+            if last_snap.elapsed() >= snap_gap {
                 last_snap = Instant::now();
-                emit(ScanEvent::Snapshot(Box::new(build_partial(
-                    &tree, &top, &exts, &node_map, &denied, files, bytes,
-                ))));
+                let build_start = Instant::now();
+                let snapshot = build_partial(&tree, &top, &exts, &node_map, &denied, files, bytes);
+                // 按本次构建耗时退避,给扫描主循环和 UI 留出余量
+                let cost = build_start.elapsed().saturating_mul(8);
+                snap_gap = if cost > SNAPSHOT_INTERVAL {
+                    cost
+                } else {
+                    SNAPSHOT_INTERVAL
+                };
+                emit(ScanEvent::Snapshot(Box::new(snapshot)));
             }
         }
     }

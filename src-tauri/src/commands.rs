@@ -65,6 +65,7 @@ pub fn start_scan(
     *inner.cancel.lock().unwrap() = cancel.clone();
     *inner.paused.lock().unwrap() = paused.clone();
     *inner.result.lock().unwrap() = None;
+    inner.pending_deletes.lock().unwrap().clear();
     inner.scanning.store(true, Ordering::SeqCst);
 
     let root_path = PathBuf::from(&root);
@@ -98,7 +99,15 @@ pub fn start_scan(
                     let _ = emit_app.emit("scan://snapshot", dto::to_dto(&snapshot));
                 }
                 scanner::ScanEvent::Done(result) => {
-                    *emit_inner.result.lock().unwrap() = Some((*result).clone());
+                    let mut result = *result;
+                    // 扫描期间被删掉的文件:从终值里扣掉,避免已清理项残留在树里
+                    // (先取出再释放锁,避免与其他线程形成 result → pending 的反向加锁顺序)
+                    let pending = {
+                        let mut guard = emit_inner.pending_deletes.lock().unwrap();
+                        std::mem::take(&mut *guard)
+                    };
+                    result.apply_deleted(&pending);
+                    *emit_inner.result.lock().unwrap() = Some(result.clone());
                     // 先落状态再通知前端,避免前端收到 done 后立刻删除被误判"扫描中"
                     if epoch == emit_inner.epoch.load(Ordering::SeqCst) {
                         emit_inner.scanning.store(false, Ordering::SeqCst);
@@ -159,9 +168,6 @@ pub fn delete_paths(
     paths: Vec<String>,
 ) -> Result<(), String> {
     let inner = Arc::clone(&state.inner);
-    if inner.scanning.load(Ordering::SeqCst) {
-        return Err("扫描进行中,请等待完成后再删除".into());
-    }
     if inner.deleting.load(Ordering::SeqCst) {
         return Err("删除正在后台进行".into());
     }
@@ -218,9 +224,20 @@ pub fn delete_paths(
         // 只有扫描结果仍是发起删除时的那一轮,才把变化同步回模型
         if epoch == inner.epoch.load(Ordering::SeqCst) {
             let mut guard = inner.result.lock().unwrap();
-            if let Some(result) = guard.as_mut() {
-                result.apply_deleted(&summary.succeeded);
-                let _ = app.emit("scan://updated", dto::to_dto(result));
+            match guard.as_mut() {
+                // 扫描已结束:直接在结果里扣减并推给前端
+                Some(result) => {
+                    result.apply_deleted(&summary.succeeded);
+                    let _ = app.emit("scan://updated", dto::to_dto(result));
+                }
+                // 扫描仍在进行(还没有终值):先记下来,Done 时统一扣减
+                None => {
+                    inner
+                        .pending_deletes
+                        .lock()
+                        .unwrap()
+                        .extend(summary.succeeded.iter().cloned());
+                }
             }
         }
 

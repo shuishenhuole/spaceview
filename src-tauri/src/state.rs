@@ -23,6 +23,9 @@ pub struct Inner {
     pub junk_cancel: Mutex<Arc<AtomicBool>>,
     pub delete_done: AtomicU64,
     pub delete_total: AtomicU64,
+    /// 扫描进行中被删除成功的路径:本轮扫描还没有终值,先暂存,
+    /// 等 Done 时统一从结果里扣掉,避免已删除的文件残留在最终树里。
+    pub pending_deletes: Mutex<Vec<std::path::PathBuf>>,
 }
 
 pub struct ScanState {
@@ -44,6 +47,7 @@ impl Default for ScanState {
                 junk_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
                 delete_done: AtomicU64::new(0),
                 delete_total: AtomicU64::new(0),
+                pending_deletes: Mutex::new(Vec::new()),
             }),
         }
     }
