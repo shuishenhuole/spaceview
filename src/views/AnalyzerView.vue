@@ -2,26 +2,19 @@
 /** SpaceView 主界面编排层。
  *
  * 与旧版 egui 的 app.rs 保持同一分层原则:
- *  - 这里持有全部 UI 状态机(空闲/扫描中/完成/失败)、过滤/排序/下钻/勾选/偏好;
+ *  - 扫描会话状态(阶段/进度/结果/勾选/删除任务)在 scanSession 模块级单例,
+ *    切换路由不影响后台扫描,回到本页原地恢复;
+ *  - 这里只持有页面本地 UI 状态(下钻/过滤/排序/焦点)并消费会话状态;
  *  - 子组件只负责渲染并上报动作,行为统一在此执行;
  *  - Rust 侧通过 scan://* / delete://* 事件推送进度与结果,这里只消费不阻塞;
  *  - 偏好(主题/语言/动效)用 localStorage 持久化,替代旧版 eframe Storage。 */
-import {
-  computed,
-  nextTick,
-  onBeforeUnmount,
-  onMounted,
-  ref,
-  shallowRef,
-  watch,
-} from "vue";
-import type { UnlistenFn } from "@tauri-apps/api/event";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { gsap } from "gsap";
 
-import { api, bindScanEvents } from "@/api";
+import { api } from "@/api";
 import logoUrl from "@/assets/logo.png";
 import { enterPanel, enterStagger } from "@/lib/motion";
 import ScanLoading from "@/components/ScanLoading.vue";
@@ -31,17 +24,29 @@ import {
   dark,
   reduceMotion,
 } from "@/composables/usePreferences";
+import {
+  // 扫描会话单例:跨路由存活,切换页面后台继续扫描
+  cancelDelete,
+  cancelScan,
+  deletedSet,
+  deleting,
+  ensureScanEvents,
+  error,
+  epoch,
+  paused,
+  performDelete,
+  phase,
+  progress,
+  result,
+  selected,
+  startScan as startSessionScan,
+  togglePause,
+} from "@/composables/scanSession";
+import { setMessage } from "@/composables/useToast";
 import type {
-  AppPhase,
-  DeleteDone,
-  DeleteItem,
-  DeleteJobState,
-  DeleteStarted,
   FileHit,
-  Progress as ProgressData,
   RowAction,
   ScanResult,
-  ScanTick,
   SortBy,
   TabKey,
 } from "@/types";
@@ -58,7 +63,7 @@ import TreemapView from "@/components/TreemapView.vue";
 const RENDER_LIMIT = 1000;
 const ROOT = 0;
 
-// ---------- 顶层状态 ----------
+// ---------- 页面本地状态 ----------
 const drives = ref<string[]>([]);
 const driveValue = ref("0");
 const customPath = ref<string | null>(null);
@@ -66,60 +71,19 @@ const targetPath = computed(
   () => customPath.value ?? drives.value[Number(driveValue.value)] ?? drives.value[0] ?? "/",
 );
 
-const phase = ref<AppPhase>("idle");
-const error = ref("");
-/** 扫描结果整体替换,不做深度响应式:整棵树可能几十万节点,
- *  用 ref 会为每个节点建 Proxy,每秒快照刷新时是主要卡顿来源。 */
-const result = shallowRef<ScanResult | null>(null);
-const progress = ref<ProgressData>({
-  dirs: 0,
-  files: 0,
-  bytes: 0,
-  cur: "",
-  startedAt: null,
-  pausedSecs: 0,
-  pausedAt: null,
-});
-const paused = ref(false);
-
 /** 默认直接展示 Treemap(扫描中也能实时看到空间分布) */
 const tab = ref<TabKey>("treemap");
 const sortBy = ref<SortBy>("size");
 const drill = ref<number[]>([ROOT]);
-const selected = ref<string[]>([]);
 const focusRow = ref<number | null>(null);
 const filterText = ref("");
 const minBytes = ref(0);
-
-const deleting = ref<DeleteJobState | null>(null);
 const confirmOpen = ref(false);
-/** 扫描会话版本号:每次开始扫描自增,用于丢弃上一轮 Treemap 入场动画 */
-const epoch = ref(0);
 
 /** 根容器引用:GSAP context 的作用域,卸载时统一 revert */
 const shellRef = ref<HTMLElement | null>(null);
 
-/** 反馈气泡 */
-let toastSeq = 0;
-let toastTimer: number | undefined;
-const toast = ref<{ id: number; text: string } | null>(null);
-
-/** 操作反馈气泡 */
-function setMessage(text: string): void {
-  const id = ++toastSeq;
-  toast.value = { id, text };
-  if (toastTimer !== undefined) window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => {
-    if (toast.value?.id === id) toast.value = null;
-  }, 5000);
-}
-
 // ---------- 派生数据 ----------
-/** 扫描期间已删除成功的路径:随后的快照仍会带回它们,先在前端过滤,
- *  等扫描结束(Done)时后端会把这些路径从终值里扣掉。 */
-const deletedPaths = ref<string[]>([]);
-const deletedSet = computed(() => new Set(deletedPaths.value));
-
 /** 大文件列表:过滤 + 排序 + 渲染上限(与后端 TopN 降序口径一致) */
 function filterFiles(res: ScanResult, limit: number): FileHit[] {
   const needle = filterText.value.trim().toLowerCase();
@@ -140,174 +104,25 @@ const matchedCount = computed(() =>
   result.value ? filterFiles(result.value, Number.MAX_SAFE_INTEGER).length : 0,
 );
 
-// ---------- 后端事件 ----------
-let firstDeleteError = "";
-let lastDeleteDone = 0;
-
-/** 组件是否已卸载:卸载后不再应用快照,避免 rAF 回调操作已脱离页面的状态 */
-let disposed = false;
-
-/** 快照按帧合并:一帧内只应用最后一个结果,避免连续 JSON 刷新阻塞交互 */
-let pendingSnapshot: ScanResult | null = null;
-let snapshotScheduled = false;
-
-function applySnapshot(p: ScanResult): void {
-  pendingSnapshot = p;
-  if (snapshotScheduled) return;
-  snapshotScheduled = true;
-  requestAnimationFrame(() => {
-    snapshotScheduled = false;
-    const next = pendingSnapshot;
-    pendingSnapshot = null;
-    if (!disposed && phase.value === "scanning" && next) result.value = next;
-  });
-}
-
-const handlers = {
-  onTick: (p: ScanTick) => {
-    progress.value.dirs = p.dirs;
-    progress.value.files = p.files;
-    progress.value.bytes = p.bytes;
-    progress.value.cur = p.cur;
-  },
-  /** 扫描中每秒一次的部分快照:只替换展示数据,不改动下钻/勾选状态
-   *  (父节点总是先于子节点入 Arena,节点索引在快照与终值间稳定) */
-  onSnapshot: (p: ScanResult) => applySnapshot(p),
-  onDone: (p: ScanResult) => {
-    result.value = p;
-    deletedPaths.value = [];
-    phase.value = "done";
-    selected.value = [];
-    focusRow.value = null;
-    progress.value.startedAt = null;
-    progress.value.pausedAt = null;
-    paused.value = false;
-  },
-  /** 后台删除结束后 Rust 已把 apply_deleted 同步进模型,这里整体替换 */
-  onUpdated: (p: ScanResult) => {
-    result.value = p;
-  },
-  onCancelled: () => {
-    phase.value = "idle";
-    result.value = null;
-    paused.value = false;
-    progress.value.startedAt = null;
-  },
-  onFailed: (message: string) => {
-    phase.value = "failed";
-    error.value = message;
-    result.value = null;
-    setMessage(t("toast.scanFailed", message));
-  },
-  onDeleteStarted: (p: DeleteStarted) => {
-    deleting.value = {
-      done: p.done,
-      total: p.total,
-      ok: deleting.value?.ok ?? 0,
-      current: p.path,
-      cancelled: false,
-    };
-  },
-  onDeleteItem: (p: DeleteItem) => {
-    lastDeleteDone = p.done;
-    // 成功项从勾选集剔除;失败项放回勾选集便于直接重试
-    const set = new Set(selected.value);
-    if (p.error === null) {
-      set.delete(p.path);
-      // 扫描中删除:快照会把该文件再带回来,记下来在前端过滤掉
-      if (phase.value === "scanning" && !deletedSet.value.has(p.path)) {
-        deletedPaths.value = [...deletedPaths.value, p.path];
-      }
-    } else {
-      set.add(p.path);
-      if (!firstDeleteError) firstDeleteError = p.error;
-    }
-    selected.value = [...set];
-    if (deleting.value) {
-      deleting.value = {
-        ...deleting.value,
-        done: p.done,
-        total: p.total,
-        ok: p.ok,
-        current: null,
-      };
-    }
-  },
-  onDeleteDone: (p: DeleteDone) => {
-    deleting.value = null;
-    let msg =
-      p.failed === 0
-        ? t("toast.deleted", p.ok)
-        : t("toast.deletedPartial", p.ok, p.failed, firstDeleteError);
-    if (p.cancelled) {
-      msg = t("toast.deleteCancelled", msg, Math.max(0, p.total - lastDeleteDone));
-    }
-    setMessage(msg);
-    firstDeleteError = "";
-  },
-};
-
 // ---------- 行为 ----------
-async function startScan(): Promise<void> {
+/** 页面级入口:重置本地 UI(下钻栈/焦点/确认框)后委托会话层开始扫描 */
+async function handleStartScan(): Promise<void> {
   if (deleting.value) {
     setMessage(t("toast.blockedByDelete"));
     return;
   }
-  if (phase.value === "scanning") return;
-
-  epoch.value += 1;
-  const root = targetPath.value;
-  result.value = null;
-  deletedPaths.value = [];
   drill.value = [ROOT];
-  selected.value = [];
   focusRow.value = null;
   confirmOpen.value = false;
-  error.value = "";
-  paused.value = false;
-  progress.value = {
-    dirs: 0,
-    files: 0,
-    bytes: 0,
-    cur: "",
-    startedAt: performance.now(),
-    pausedSecs: 0,
-    pausedAt: null,
-  };
-  phase.value = "scanning";
-  try {
-    await api.startScan(root);
-  } catch (e) {
-    phase.value = "failed";
-    error.value = String(e);
-    setMessage(t("toast.scanFailed", String(e)));
-  }
+  await startSessionScan(targetPath.value);
 }
 
-function cancelScan(): void {
-  paused.value = false;
-  progress.value.pausedAt = null;
-  void api.cancelScan();
-}
-
-async function togglePause(): Promise<void> {
-  if (phase.value !== "scanning") return;
-  const next = !paused.value;
-  paused.value = next;
-  const now = performance.now();
-  // 记录/结算暂停区间,让状态栏耗时与速度在暂停时冻结
-  if (next) {
-    progress.value.pausedAt = now;
-  } else if (progress.value.pausedAt !== null) {
-    progress.value.pausedSecs += (now - progress.value.pausedAt) / 1000;
-    progress.value.pausedAt = null;
-  }
-  try {
-    await api.setPaused(next);
-  } catch {
-    /* 后端不在线时仅保留本地暂停显示 */
-  }
-  setMessage(next ? t("toast.paused") : t("toast.resumed"));
+/** 确认删除:收起对话框后委托会话层执行 */
+function handlePerformDelete(): void {
+  confirmOpen.value = false;
+  // 扫描进行中也允许删除(文件已列出即可清理),仅删除任务不能并发
+  if (phase.value !== "done" && phase.value !== "scanning") return;
+  void performDelete(selected.value);
 }
 
 async function browse(): Promise<void> {
@@ -328,30 +143,6 @@ const toggleMotion = (): void => {
   reduceMotion.value = !reduceMotion.value;
   setMessage(reduceMotion.value ? t("toast.motionOff") : t("toast.motionOn"));
 };
-
-async function performDelete(): Promise<void> {
-  confirmOpen.value = false;
-  // 扫描进行中也允许删除(文件已列出即可清理),仅删除任务不能并发
-  if ((phase.value !== "done" && phase.value !== "scanning") || deleting.value) return;
-  const paths = [...selected.value];
-  if (!paths.length) return;
-  firstDeleteError = "";
-  lastDeleteDone = 0;
-  deleting.value = { done: 0, total: paths.length, ok: 0, current: null, cancelled: false };
-  try {
-    await api.deletePaths(paths);
-  } catch (e) {
-    deleting.value = null;
-    setMessage(String(e));
-  }
-}
-
-function cancelDelete(): void {
-  if (!deleting.value) return;
-  deleting.value = { ...deleting.value, cancelled: true };
-  void api.cancelDelete();
-  setMessage(t("toast.cancelDelete"));
-}
 
 async function handleRowAction(action: RowAction): Promise<void> {
   if (action.type === "copy") {
@@ -483,8 +274,6 @@ watch(result, async (next, prev) => {
 });
 
 // ---------- 生命周期 ----------
-let unlisteners: UnlistenFn[] = [];
-
 onMounted(async () => {
   try {
     drives.value = await api.listDrives();
@@ -494,7 +283,9 @@ onMounted(async () => {
   // 默认选中系统盘,找不到则取第一个
   const idx = drives.value.findIndex((d) => d.toUpperCase().startsWith("C:"));
   driveValue.value = String(idx >= 0 ? idx : 0);
-  unlisteners = await bindScanEvents(handlers);
+  // 绑定后端事件(App 生命周期内只绑一次、不随路由卸载):
+  // 扫描/删除事件持续写入 scanSession 单例,离开页面后台照常推进
+  await ensureScanEvents();
   window.addEventListener("keydown", onKeydown);
   // 窗口完全就绪后再下发一次,确保 DWM 属性在标题栏可见后生效
   void api.setTitlebarTheme(dark.value).catch(() => {});
@@ -511,19 +302,9 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
-  // 后台清理:扫描是长任务(大目录可达数分钟),离开页面时主动取消,
-  // 否则 Rust 扫描线程继续空转,回到本页再点扫描还会被"扫描正在进行中"挡住。
-  // 取消是协作式的:后端线程感知 cancel 标志后自行退出并复位 scanning 状态。
-  if (phase.value === "scanning") {
-    void api.cancelScan();
-  }
-  // 删除任务不取消:用户已确认的批量删除让它后台跑完
-  // (逐项进回收站,后端结束后自行复位 deleting 标志,不影响下次扫描)。
-  disposed = true;
-  pendingSnapshot = null;
-  for (const off of unlisteners) off();
+  // 注意:这里不取消扫描、不解绑事件 —— 扫描会话是模块级单例,
+  // 切到电脑清理页时磁盘分析继续在后台进行,回来原地恢复进度与结果。
   window.removeEventListener("keydown", onKeydown);
-  if (toastTimer !== undefined) window.clearTimeout(toastTimer);
   animContext?.revert();
 });
 </script>
@@ -543,7 +324,7 @@ onBeforeUnmount(() => {
         :reduce-motion="reduceMotion"
         @select-drive="driveValue = $event"
         @browse="browse"
-        @start="startScan"
+        @start="handleStartScan"
         @cancel="cancelScan"
         @toggle-pause="togglePause"
         @toggle-theme="toggleTheme"
@@ -670,7 +451,7 @@ onBeforeUnmount(() => {
         :open="confirmOpen"
         :paths="selected"
         @update:open="confirmOpen = $event"
-        @confirm="performDelete"
+        @confirm="handlePerformDelete"
       />
     </div>
 </template>
