@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/tooltip";
 import { currentLang, t } from "@/i18n";
 import logoUrl from "@/assets/logo.png";
+import AppNav from "@/components/AppNav.vue";
 import type { AppPhase } from "@/types";
 
 const props = defineProps<{
@@ -64,6 +65,7 @@ const busy = computed(() => props.phase === "scanning" || props.deleting);
     <div class="brand-logo">
       <img :src="logoUrl" alt="SpaceView" class="size-full" />
     </div>
+    <AppNav />
     <div class="mr-1 hidden flex-col leading-tight sm:flex">
       <span class="text-sm font-semibold tracking-tight">SpaceView</span>
       <span class="text-[10px] text-muted-foreground">Disk Space Analyzer</span>

@@ -5,6 +5,9 @@ import type {
   DeleteDone,
   DeleteItem,
   DeleteStarted,
+  JunkRoot,
+  JunkScanDone,
+  JunkTick,
   ScanResult,
   ScanTick,
 } from "./types";
@@ -19,6 +22,13 @@ export const api = {
   cancelDelete: () => invoke<void>("cancel_delete"),
   /** 同步 Windows 原生标题栏深/浅色(DWM 沉浸深色属性) */
   setTitlebarTheme: (dark: boolean) => invoke<void>("set_titlebar_theme", { dark }),
+};
+
+/** 电脑清理 commands */
+export const junkApi = {
+  junkRoots: () => invoke<JunkRoot[]>("junk_roots"),
+  scanJunk: (roots: string[]) => invoke<void>("scan_junk", { roots }),
+  cancelJunk: () => invoke<void>("cancel_junk"),
 };
 
 export interface ScanEventHandlers {
@@ -45,5 +55,20 @@ export function bindScanEvents(h: ScanEventHandlers): Promise<UnlistenFn[]> {
     listen<DeleteStarted>("delete://started", (e) => h.onDeleteStarted(e.payload)),
     listen<DeleteItem>("delete://item", (e) => h.onDeleteItem(e.payload)),
     listen<DeleteDone>("delete://done", (e) => h.onDeleteDone(e.payload)),
+  ]);
+}
+
+/** 电脑清理 events */
+export interface JunkEventHandlers {
+  onTick: (p: JunkTick) => void;
+  onDone: (p: JunkScanDone) => void;
+  onFailed: (message: string) => void;
+}
+
+export function bindJunkEvents(h: JunkEventHandlers): Promise<UnlistenFn[]> {
+  return Promise.all([
+    listen<JunkTick>("junk://tick", (e) => h.onTick(e.payload)),
+    listen<JunkScanDone>("junk://done", (e) => h.onDone(e.payload)),
+    listen<string>("junk://failed", (e) => h.onFailed(e.payload)),
   ]);
 }

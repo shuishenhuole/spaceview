@@ -132,6 +132,34 @@ export function leaveToast(el: Element, done: () => void): void {
   });
 }
 
+/** 加载遮罩淡入(不阻塞内容渲染,只盖住切换瞬间的布局) */
+export function fadeIn(el: Element, done: () => void): void {
+  if (!motionEnabled()) {
+    gsap.set(el, { autoAlpha: 1 });
+    done();
+    return;
+  }
+  gsap.fromTo(
+    el,
+    { autoAlpha: 0 },
+    { autoAlpha: 1, duration: 0.18, ease: "power2.out", onComplete: done },
+  );
+}
+
+/** 加载遮罩淡出 */
+export function fadeOut(el: Element, done: () => void): void {
+  if (!motionEnabled()) {
+    done();
+    return;
+  }
+  gsap.to(el, {
+    autoAlpha: 0,
+    duration: 0.26,
+    ease: "power2.in",
+    onComplete: done,
+  });
+}
+
 /** 主题切换时的轻微亮度反馈 */
 export function flashTheme(el: Element): void {
   if (!motionEnabled()) return;

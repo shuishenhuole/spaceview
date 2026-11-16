@@ -181,6 +181,122 @@ body {
   word-break: break-all;
 }
 
+// ===== 视图切换加载遮罩 =====
+.view-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+  border-radius: inherit;
+  background: color-mix(in oklch, var(--card) 82%, transparent);
+  backdrop-filter: blur(6px);
+}
+.skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  width: min(340px, 62%);
+}
+.skeleton-bar {
+  height: 0.6rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklch, var(--muted) 92%, transparent) 25%,
+    color-mix(in oklch, var(--muted-foreground) 20%, transparent) 50%,
+    color-mix(in oklch, var(--muted) 92%, transparent) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.25s linear infinite;
+}
+@keyframes skeleton-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+// 扫描中的刷新脉冲(不遮挡内容)
+.refresh-pulse { user-select: none; }
+.refresh-dot {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 999px;
+  background: var(--brand);
+  animation: refresh-ping 1.4s ease-out infinite;
+}
+@keyframes refresh-ping {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--brand) 55%, transparent); }
+  70%, 100% { box-shadow: 0 0 0 7px transparent; }
+}
+
+// ===== 顶部导航(两个视图共用) =====
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, color 0.15s ease;
+
+  &:hover {
+    background: var(--muted);
+    color: var(--foreground);
+  }
+  &.nav-link-active {
+    background: var(--brand-soft);
+    color: var(--brand);
+  }
+}
+
+// ===== 全局自定义右键菜单(替代 WebView 默认菜单) =====
+.global-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 196px;
+  padding: 0.35rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 16px 40px -16px rgb(0 0 0 / 55%);
+  backdrop-filter: blur(10px);
+}
+.global-menu-label {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.global-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.42rem 0.55rem;
+  border-radius: 0.45rem;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+
+  &:hover { background: var(--accent); }
+}
+.global-menu-sep {
+  height: 1px;
+  margin: 0.25rem 0;
+  background: var(--border);
+}
+
 // 减少动画:关闭 CSS 位移与入场动画;GSAP 动效由 motion.ts 的
 // motionEnabled() 统一跳过,这里再兜底把残留 CSS 动画即时化。
 .reduce-motion {
