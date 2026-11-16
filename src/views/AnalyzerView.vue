@@ -573,8 +573,7 @@ onBeforeUnmount(() => {
             :cur="progress.cur"
           />
 
-          <div v-if="phase === 'scanning' && result" class="scan-progress shrink-0" />
-          <Tabs v-if="result" v-model="tab" class="flex min-h-0 flex-1 flex-col p-3">
+          <div v-if="phase === 'scanning' && result" class="scan-progress shrink-0" />          <Tabs v-if="result" v-model="tab" class="flex min-h-0 flex-1 flex-col p-3">
             <div class="flex shrink-0 items-center gap-3">
               <span
                 v-if="phase === 'scanning'"
@@ -623,8 +622,6 @@ onBeforeUnmount(() => {
               />
             </TabsContent>
           </Tabs>
-
-          <ScanLoading v-if="phase === 'scanning'" :dirs="progress.dirs" :files="progress.files" :bytes="progress.bytes" :cur="progress.cur" />
         </main>
       </div>
 
